@@ -1,6 +1,7 @@
 const std = @import("std");
 const ascii = std.ascii;
 const testing = std.testing;
+const mem = std.mem;
 
 pub const Token = struct {
     value: []const u8,
@@ -31,6 +32,10 @@ pub const Token = struct {
         keyword_or,
         eof,
     };
+
+    pub fn dump(token: Token) void {
+        std.debug.print("{}: \"{}\"\n", .{ @tagName(token.kind), token.value });
+    }
 };
 
 const keywords = std.ComptimeStringMap(Token.Kind, .{
@@ -50,174 +55,207 @@ const keywords = std.ComptimeStringMap(Token.Kind, .{
     .{ "or", .keyword_or },
 });
 
+const tag_open_delim = "{%";
+const tag_close_delim = "%}";
+const variable_open_delim = "{{";
+const variable_close_delim = "}}";
+const comment_open_delim = "{#";
+const comment_close_delim = "#}";
+
 const Lexer = struct {
     source: []const u8,
     start: usize,
     pos: usize,
     state: State,
-    token: ?Token,
 
     const State = enum {
-        start,
         text,
-        start_delim,
+        tag_open,
         inside_tag,
-        inside_variable,
-        tag_name,
-        after_tag_name,
-        start_tag_close,
-        variable_name,
+        identifier,
+        tag_close,
+        eof,
     };
 
     const Self = @This();
 
-    fn init(source: []const u8) Self {
+    pub fn init(source: []const u8) Self {
         return Self{
             .source = source,
             .start = @as(usize, 0),
             .pos = @as(usize, 0),
-            .state = .start,
-            .token = null,
+            .state = .text,
         };
     }
 
-    fn dumpToken(self: *Self, token: Token) void {
-        std.debug.print("{}: \"{}\"\n", .{ @tagName(token.kind), token.value });
-    }
+    const Iterator = struct {
+        lexer: *Lexer,
+        eof: bool,
 
-    pub fn next(self: *Self) Token {
-        var token = Token{
-            .value = "",
-            .kind = .eof,
-        };
-        while (self.pos < self.source.len) : (self.pos += 1) {
-            const c = self.source[self.pos];
-            //std.debug.print("c:{c}\tstate:{}\n", .{ c, self.state });
-            switch (self.state) {
-                .start => switch (c) {
-                    '{' => {
-                        self.state = .start_delim;
-                    },
-                    else => {
-                        token.kind = .text;
-                        self.state = .text;
-                    },
-                },
-                .text => switch (c) {
-                    '{' => {
-                        self.state = .start;
-                        break;
-                    },
-                    else => {},
-                },
-                .start_delim => switch (c) {
-                    '%' => {
-                        self.pos += 1;
-                        token.kind = .tag_open;
-                        self.state = .inside_tag;
-                        break;
-                    },
-                    '{' => {
-                        self.pos += 1;
-                        token.kind = .variable_open;
-                        self.state = .inside_variable;
-                        break;
-                    },
-                    else => {
-                        self.state = .text;
-                    },
-                },
-                .inside_tag => switch (c) {
-                    ' ', '\t', '\r', '\n' => {
-                        self.start += 1;
-                    },
-                    'a'...'z', 'A'...'Z', '_' => {
-                        token.kind = .identifier;
-                        self.state = .tag_name;
-                    },
-                    else => {},
-                },
-                .tag_name => switch (c) {
-                    'a'...'z', 'A'...'Z', '_', '0'...'9' => {},
-                    else => {
-                        if (keywords.get(self.source[self.start..self.pos])) |kind| {
-                            token.kind = kind;
-                        }
-                        self.state = .after_tag_name;
-                        break;
-                    },
-                },
-                .after_tag_name => switch (c) {
-                    'a'...'z', 'A'...'Z', '_' => {
-                        token.kind = .identifier;
-                    },
-                    '%' => {
-                        self.state = .start_tag_close;
-                    },
-                    else => {},
-                },
-                .start_tag_close => switch (c) {
-                    '}' => {
-                        token.kind = .tag_close;
-                    },
-                    else => {},
-                },
-                .inside_variable => switch (c) {
-                    ' ', '\t', '\r', '\n' => {
-                        self.start += 1;
-                    },
-                    'a'...'z', 'A'...'Z', '_' => {
-                        token.kind = .identifier;
-                        self.state = .variable_name;
-                    },
-                    '%' => {
-                        self.state = .start_tag_close;
-                    },
-                    else => {},
-                },
-                .variable_name => switch (c) {
-                    'a'...'z', 'A'...'Z', '_', '0'...'9' => {},
-                    else => {},
-                },
+        pub fn next(it: *Iterator) ?Token {
+            if (it.eof) return null;
+            const token = it.lexer.nextToken();
+            if (token.kind == .eof) {
+                it.eof = true;
+                return null;
             }
-        } else {
-            switch (self.state) {
-                .tag_name => {
-                    if (keywords.get(self.source[self.start..self.pos])) |kind| {
-                        token.kind = kind;
-                    }
-                    self.state = .after_tag_name;
-                },
-                else => {},
-            }
+            return token;
         }
-        token.value = self.source[self.start..self.pos];
+    };
+
+    pub fn iterator(self: *Self) Iterator {
+        return Iterator{
+            .lexer = self,
+            .eof = false,
+        };
+    }
+
+    // consumes the input between start and pos
+    fn makeToken(self: *Self, kind: Token.Kind) Token {
+        const token = Token{
+            .value = self.source[self.start..self.pos],
+            .kind = kind,
+        };
         self.start = self.pos;
         return token;
+    }
+
+    fn nextInput(self: *Self) ?u8 {
+        std.debug.assert(!(self.pos > self.source.len));
+        if (self.pos == self.source.len) return null;
+        const c = self.source[self.pos];
+        self.pos += 1;
+        return c;
+    }
+
+    fn peekInput(self: *Self) ?u8 {
+        const in = self.nextInput();
+        self.pos -= 1;
+        return in;
+    }
+
+    pub fn nextToken(self: *Self) Token {
+        while (true) {
+            switch (self.state) {
+                .text => {
+                    if (mem.indexOf(u8, self.source[self.pos..], tag_open_delim)) |x| {
+                        self.pos += x;
+                        self.state = .tag_open;
+                        if (self.pos > self.start) {
+                            return self.makeToken(.text);
+                        }
+                        continue;
+                    }
+                    self.pos = self.source.len;
+                    self.state = .eof;
+                    if (self.pos > self.start) {
+                        return self.makeToken(.text);
+                    }
+                },
+
+                .tag_open => {
+                    self.pos += mem.len(tag_open_delim);
+                    self.state = .inside_tag;
+                    return self.makeToken(.tag_open);
+                },
+
+                .inside_tag => {
+                    if (mem.startsWith(u8, self.source[self.pos..], tag_close_delim)) {
+                        self.state = .tag_close;
+                    } else {
+                        if (self.nextInput()) |c| {
+                            switch (c) {
+                                'A'...'Z', 'a'...'z', '_' => self.state = .identifier,
+                                ' ', '\t', '\r', '\n' => {
+                                    while (true) {
+                                        const in = self.peekInput();
+                                        if (self.peekInput()) |cc| {
+                                            if (!ascii.isSpace(cc)) break;
+                                        } else {
+                                            break;
+                                        }
+                                        _ = self.nextInput();
+                                    }
+                                    self.start = self.pos;
+                                },
+                                else => self.@"error"(c),
+                            }
+                        } else {
+                            // TODO handle unclosed tag
+                            self.state = .eof;
+                            continue;
+                        }
+                    }
+                },
+
+                .identifier => {
+                    while (true) {
+                        if (self.nextInput()) |c| {
+                            switch (c) {
+                                'A'...'Z', 'a'...'z', '_', '0'...'9' => {},
+                                else => {
+                                    self.pos -= 1;
+                                    self.state = .inside_tag;
+                                    break;
+                                },
+                            }
+                        } else {
+                            self.state = .eof;
+                            break;
+                        }
+                    }
+                    const string = self.source[self.start..self.pos];
+                    // TODO check terminator
+                    if (keywords.get(string)) |kind| {
+                        return self.makeToken(kind);
+                    }
+                    return self.makeToken(.identifier);
+                },
+
+                .tag_close => {
+                    self.pos += mem.len(tag_close_delim);
+                    self.state = .text;
+                    return self.makeToken(.tag_close);
+                },
+
+                .eof => {
+                    return self.makeToken(.eof);
+                },
+            }
+        }
+        unreachable;
+    }
+
+    fn @"error"(self: *Self, c: u8) void {
+        std.debug.print("lexer error on char: {c}\n", .{c});
     }
 };
 
 fn testLexer(source: []const u8, expected_tokens: []const Token.Kind) void {
     var lexer = Lexer.init(source);
-    for (expected_tokens) |expected| {
-        const token = lexer.next();
-        lexer.dumpToken(token);
-        if (token.kind != expected) {
-            std.debug.panic("want {}, got {}", .{ @tagName(expected), @tagName(token.kind) });
+    var it = lexer.iterator();
+    for (expected_tokens) |expected, i| {
+        if (it.next()) |token| {
+            if (token.kind != expected) {
+                std.debug.panic("want {}, got {}", .{ @tagName(expected), @tagName(token.kind) });
+            }
+        } else {
+            std.debug.panic("expected a {} token at pos {d}", .{ @tagName(expected), i });
         }
     }
-    const last = lexer.next();
+    const last = lexer.nextToken();
     std.testing.expect(last.kind == .eof);
 }
 
 test "lexer - simple template" {
     testLexer("", &[_]Token.Kind{});
-    testLexer("<ul>", &[_]Token.Kind{.text});
+    testLexer("<title>", &[_]Token.Kind{.text});
     testLexer("{%", &[_]Token.Kind{.tag_open});
-    testLexer("<ul>\n{%", &[_]Token.Kind{ .text, .tag_open });
-    testLexer("<ul>\n{% block", &[_]Token.Kind{ .text, .tag_open, .keyword_block });
-    testLexer("<ul>\n{% block title", &[_]Token.Kind{ .text, .tag_open, .keyword_block, .identifier });
-    //testLexer("<ul>\n{% block title %}", &[_]Token.Kind{ .text, .tag_open, .keyword_block, .identifier, .tag_close });
+    testLexer("<title>\n{%", &[_]Token.Kind{ .text, .tag_open });
+    testLexer("<title>\n{% block", &[_]Token.Kind{ .text, .tag_open, .keyword_block });
+    testLexer("<title>\n{% block title", &[_]Token.Kind{ .text, .tag_open, .keyword_block, .identifier });
+    testLexer("<title>\n{% block title %}", &[_]Token.Kind{ .text, .tag_open, .keyword_block, .identifier, .tag_close });
+    testLexer("<title>\n{% block title %}\n{% endblock %}</title>", &[_]Token.Kind{ .text, .tag_open, .keyword_block, .identifier, .tag_close, .text, .tag_open, .keyword_endblock, .tag_close, .text });
 }
 
 // test "lex template" {
