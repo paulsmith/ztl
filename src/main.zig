@@ -2,6 +2,7 @@ const std = @import("std");
 const ascii = std.ascii;
 const testing = std.testing;
 const mem = std.mem;
+const fmt = std.fmt;
 
 pub const Token = struct {
     value: []const u8,
@@ -30,6 +31,7 @@ pub const Token = struct {
         keyword_not,
         keyword_and,
         keyword_or,
+        @"error",
         eof,
     };
 
@@ -62,6 +64,9 @@ const variable_close_delim = "}}";
 const comment_open_delim = "{#";
 const comment_close_delim = "#}";
 
+var error_message_buffer: [100]u8 = undefined;
+const error_message_buf = error_message_buffer[0..];
+
 const Lexer = struct {
     source: []const u8,
     start: usize,
@@ -74,6 +79,7 @@ const Lexer = struct {
         inside_tag,
         identifier,
         tag_close,
+        comment_open,
         eof,
     };
 
@@ -145,6 +151,13 @@ const Lexer = struct {
                             return self.makeToken(.text);
                         }
                         continue;
+                    } else if (mem.indexOf(u8, self.source[self.pos..], comment_open_delim)) |x| {
+                        self.pos += x;
+                        self.state = .comment_open;
+                        if (self.pos > self.start) {
+                            return self.makeToken(.text);
+                        }
+                        continue;
                     }
                     self.pos = self.source.len;
                     self.state = .eof;
@@ -178,7 +191,7 @@ const Lexer = struct {
                                     }
                                     self.start = self.pos;
                                 },
-                                else => self.@"error"(c),
+                                else => return self.@"error"("unexpected char '{c}'", .{c}),
                             }
                         } else {
                             // TODO handle unclosed tag
@@ -218,6 +231,16 @@ const Lexer = struct {
                     return self.makeToken(.tag_close);
                 },
 
+                .comment_open => {
+                    if (mem.indexOf(u8, self.source[self.pos..], comment_close_delim)) |x| {
+                        self.pos += x + mem.len(comment_close_delim);
+                        self.start = self.pos;
+                        self.state = .text;
+                    } else {
+                        return self.@"error"("unclosed comment", .{});
+                    }
+                },
+
                 .eof => {
                     return self.makeToken(.eof);
                 },
@@ -226,8 +249,11 @@ const Lexer = struct {
         unreachable;
     }
 
-    fn @"error"(self: *Self, c: u8) void {
-        std.debug.print("lexer error on char: {c}\n", .{c});
+    fn @"error"(self: *Self, comptime message: []const u8, args: anytype) Token {
+        return Token{
+            .value = fmt.bufPrint(error_message_buf, message, args) catch unreachable,
+            .kind = .@"error",
+        };
     }
 };
 
@@ -237,7 +263,7 @@ fn testLexer(source: []const u8, expected_tokens: []const Token.Kind) void {
     for (expected_tokens) |expected, i| {
         if (it.next()) |token| {
             if (token.kind != expected) {
-                std.debug.panic("want {}, got {}", .{ @tagName(expected), @tagName(token.kind) });
+                std.debug.panic("want {}, got {} - value: '{}'", .{ @tagName(expected), @tagName(token.kind), token.value });
             }
         } else {
             std.debug.panic("expected a {} token at pos {d}", .{ @tagName(expected), i });
@@ -256,6 +282,7 @@ test "lexer - simple template" {
     testLexer("<title>\n{% block title", &[_]Token.Kind{ .text, .tag_open, .keyword_block, .identifier });
     testLexer("<title>\n{% block title %}", &[_]Token.Kind{ .text, .tag_open, .keyword_block, .identifier, .tag_close });
     testLexer("<title>\n{% block title %}\n{% endblock %}</title>", &[_]Token.Kind{ .text, .tag_open, .keyword_block, .identifier, .tag_close, .text, .tag_open, .keyword_endblock, .tag_close, .text });
+    testLexer("comment test {# this is a comment #}\nrest of text", &[_]Token.Kind{ .text, .text });
 }
 
 // test "lex template" {
