@@ -44,7 +44,7 @@ pub const Token = struct {
     };
 
     pub fn dump(token: Token) void {
-        std.debug.print("{}, line {}: \"{}\"\n", .{ @tagName(token.kind), token.lineno, token.value });
+        std.debug.print("{}, line {}: \"{}\"\n", .{ @tagName(token.kind), token.line, token.value });
     }
 };
 
@@ -218,10 +218,17 @@ const Lexer = struct {
                 },
 
                 .inside_tag => {
-                    // TODO check for invalid close delim (expression when started with statement, etc.)
+                    // We test for matching correct closing delimiters here in
+                    // the lexer and not the parser because from a tokenization
+                    // POV we need to know if the lexer's state is inside a
+                    // 'tag' (a statement or expression) or in regular raw
+                    // template text.
+                    const delim = self.open_delim orelse unreachable;
                     if (mem.startsWith(u8, self.source[self.pos..], statement_close_delim)) {
+                        if (delim == .expression_open) return self.@"error"("invalid closing delimiter: expected '{}', found '{}'", .{ expression_close_delim, statement_close_delim });
                         self.state = .tag_close;
                     } else if (mem.startsWith(u8, self.source[self.pos..], expression_close_delim)) {
+                        if (delim == .statement_open) return self.@"error"("invalid closing delimiter: expected '{}', found '{}'", .{ statement_close_delim, expression_close_delim });
                         self.state = .tag_close;
                     } else {
                         if (self.nextInput()) |c| {
@@ -309,6 +316,9 @@ const Lexer = struct {
     }
 
     fn @"error"(self: *Self, comptime message: []const u8, args: anytype) Token {
+        // TODO resynchronize or move to eof?
+        self.start = self.pos;
+        self.state = .eof;
         return Token{
             .value = fmt.bufPrint(error_message_buf, message, args) catch unreachable,
             .kind = .@"error",
@@ -368,6 +378,19 @@ test "lexer - tracking line numbers" {
     testLexerLineNo("<title>\n{%", &[_]usize{ 1, 2 }, 2);
     testLexerLineNo("<title>\n{% block %}", &[_]usize{ 1, 2, 2, 2 }, 2);
     testLexerLineNo("<title>\n{% block %}\n</title>", &[_]usize{ 1, 2, 2, 2, 2 }, 3);
+}
+
+test "lexer - error invalid closing delimiter" {
+    const strings = [_][]const u8{ "{% foo }}", "{{ bar %}" };
+    for (strings) |source| {
+        var lexer = Lexer.init(source);
+        var it = lexer.iterator();
+        var last: Token = undefined;
+        while (it.next()) |token| {
+            last = token;
+        }
+        std.testing.expectEqual(Token.Kind.@"error", last.kind);
+    }
 }
 
 // test "lex template" {
