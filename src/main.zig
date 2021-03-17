@@ -1,9 +1,3 @@
-// TODO
-// - [x] implement variables/expressions
-// - [x] add line numbers
-// - [ ] track name of file
-// - [ ] compress some of the starting tag logic
-
 const std = @import("std");
 const ascii = std.ascii;
 const testing = std.testing;
@@ -168,37 +162,37 @@ const Lexer = struct {
         self.start = self.pos;
     }
 
+    const OpenDelimiter = struct {
+        delimiter: []const u8,
+        delimiter_kind: ?Token.Kind,
+        next_state: State,
+    };
+
+    const open_delimiters = [_]OpenDelimiter{
+        .{ .delimiter = statement_open_delim, .delimiter_kind = .statement_open, .next_state = .tag_open },
+        .{ .delimiter = expression_open_delim, .delimiter_kind = .expression_open, .next_state = .tag_open },
+        .{ .delimiter = comment_open_delim, .delimiter_kind = null, .next_state = .comment_open },
+    };
+
     pub fn nextToken(self: *Self) Token {
         while (true) {
             switch (self.state) {
                 .text => {
-                    if (mem.indexOf(u8, self.source[self.pos..], statement_open_delim)) |x| {
-                        self.pos += x;
-                        self.open_delim = .statement_open;
-                        self.state = .tag_open;
-                        if (self.pos > self.start) {
-                            self.line += mem.count(u8, self.source[self.start..self.pos], "\n");
-                            return self.makeToken(.text);
+                    var found = false;
+                    for (open_delimiters) |d| {
+                        if (mem.indexOf(u8, self.source[self.pos..], d.delimiter)) |x| {
+                            self.pos += x;
+                            self.open_delim = d.delimiter_kind;
+                            self.state = d.next_state;
+                            if (self.pos > self.start) {
+                                self.line += mem.count(u8, self.source[self.start..self.pos], "\n");
+                                return self.makeToken(.text);
+                            }
+                            found = true;
+                            break;
                         }
-                        continue;
-                    } else if (mem.indexOf(u8, self.source[self.pos..], expression_open_delim)) |x| {
-                        self.pos += x;
-                        self.open_delim = .expression_open;
-                        self.state = .tag_open;
-                        if (self.pos > self.start) {
-                            self.line += mem.count(u8, self.source[self.start..self.pos], "\n");
-                            return self.makeToken(.text);
-                        }
-                        continue;
-                    } else if (mem.indexOf(u8, self.source[self.pos..], comment_open_delim)) |x| {
-                        self.pos += x;
-                        self.state = .comment_open;
-                        if (self.pos > self.start) {
-                            self.line += mem.count(u8, self.source[self.start..self.pos], "\n");
-                            return self.makeToken(.text);
-                        }
-                        continue;
                     }
+                    if (found) continue;
                     self.pos = self.source.len;
                     self.state = .eof;
                     if (self.pos > self.start) {
