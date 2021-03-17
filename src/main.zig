@@ -1,4 +1,5 @@
 // TODO
+// - [x] implement variables/expressions
 // - [x] add line numbers
 // - [ ] track name of file
 // - [ ] compress some of the starting tag logic
@@ -8,6 +9,7 @@ const ascii = std.ascii;
 const testing = std.testing;
 const mem = std.mem;
 const fmt = std.fmt;
+const assert = std.debug.assert;
 
 pub const Token = struct {
     value: []const u8,
@@ -16,10 +18,10 @@ pub const Token = struct {
 
     pub const Kind = enum {
         text,
-        tag_open,
-        tag_close,
-        variable_open,
-        variable_close,
+        statement_open,
+        statement_close,
+        expression_open,
+        expression_close,
         comment_open,
         comment_close,
         identifier,
@@ -63,10 +65,10 @@ const keywords = std.ComptimeStringMap(Token.Kind, .{
     .{ "or", .keyword_or },
 });
 
-const tag_open_delim = "{%";
-const tag_close_delim = "%}";
-const variable_open_delim = "{{";
-const variable_close_delim = "}}";
+const statement_open_delim = "{%";
+const statement_close_delim = "%}";
+const expression_open_delim = "{{";
+const expression_close_delim = "}}";
 const comment_open_delim = "{#";
 const comment_close_delim = "#}";
 
@@ -80,6 +82,7 @@ const Lexer = struct {
     state: State,
     line: usize,
     startline: usize,
+    open_delim: ?Token.Kind,
 
     const State = enum {
         text,
@@ -101,6 +104,7 @@ const Lexer = struct {
             .state = .text,
             .line = @as(usize, 1),
             .startline = @as(usize, 1),
+            .open_delim = null,
         };
     }
 
@@ -139,7 +143,7 @@ const Lexer = struct {
     }
 
     fn nextInput(self: *Self) ?u8 {
-        std.debug.assert(!(self.pos > self.source.len));
+        assert(!(self.pos > self.source.len));
         if (self.pos == self.source.len) return null;
         const c = self.source[self.pos];
         if (c == '\n') self.line += 1;
@@ -166,8 +170,18 @@ const Lexer = struct {
         while (true) {
             switch (self.state) {
                 .text => {
-                    if (mem.indexOf(u8, self.source[self.pos..], tag_open_delim)) |x| {
+                    if (mem.indexOf(u8, self.source[self.pos..], statement_open_delim)) |x| {
                         self.pos += x;
+                        self.open_delim = .statement_open;
+                        self.state = .tag_open;
+                        if (self.pos > self.start) {
+                            self.line += mem.count(u8, self.source[self.start..self.pos], "\n");
+                            return self.makeToken(.text);
+                        }
+                        continue;
+                    } else if (mem.indexOf(u8, self.source[self.pos..], expression_open_delim)) |x| {
+                        self.pos += x;
+                        self.open_delim = .expression_open;
                         self.state = .tag_open;
                         if (self.pos > self.start) {
                             self.line += mem.count(u8, self.source[self.start..self.pos], "\n");
@@ -192,13 +206,22 @@ const Lexer = struct {
                 },
 
                 .tag_open => {
-                    self.pos += mem.len(tag_open_delim);
-                    self.state = .inside_tag;
-                    return self.makeToken(.tag_open);
+                    if (self.open_delim) |delim| {
+                        self.pos += mem.len(switch (delim) {
+                            .statement_open => statement_open_delim,
+                            .expression_open => expression_open_delim,
+                            else => unreachable,
+                        });
+                        self.state = .inside_tag;
+                        return self.makeToken(delim);
+                    } else std.debug.panic("invalid state, expected non-null open_delim", .{});
                 },
 
                 .inside_tag => {
-                    if (mem.startsWith(u8, self.source[self.pos..], tag_close_delim)) {
+                    // TODO check for invalid close delim (expression when started with statement, etc.)
+                    if (mem.startsWith(u8, self.source[self.pos..], statement_close_delim)) {
+                        self.state = .tag_close;
+                    } else if (mem.startsWith(u8, self.source[self.pos..], expression_close_delim)) {
                         self.state = .tag_close;
                     } else {
                         if (self.nextInput()) |c| {
@@ -250,9 +273,21 @@ const Lexer = struct {
                 },
 
                 .tag_close => {
-                    self.pos += mem.len(tag_close_delim);
-                    self.state = .text;
-                    return self.makeToken(.tag_close);
+                    if (self.open_delim) |delim| {
+                        self.pos += mem.len(switch (delim) {
+                            .statement_open => statement_close_delim,
+                            .expression_open => expression_close_delim,
+                            else => unreachable,
+                        });
+                        self.state = .text;
+                        const token = self.makeToken(switch (delim) {
+                            .statement_open => .statement_close,
+                            .expression_open => .expression_close,
+                            else => unreachable,
+                        });
+                        self.open_delim = null;
+                        return token;
+                    } else std.debug.panic("invalid state, expected non-null open_delim", .{});
                 },
 
                 .comment_open => {
@@ -301,13 +336,14 @@ fn testLexer(source: []const u8, expected_tokens: []const Token.Kind) void {
 test "lexer - simple template" {
     testLexer("", &[_]Token.Kind{});
     testLexer("<title>", &[_]Token.Kind{.text});
-    testLexer("{%", &[_]Token.Kind{.tag_open});
-    testLexer("<title>\n{%", &[_]Token.Kind{ .text, .tag_open });
-    testLexer("<title>\n{% block", &[_]Token.Kind{ .text, .tag_open, .keyword_block });
-    testLexer("<title>\n{% block title", &[_]Token.Kind{ .text, .tag_open, .keyword_block, .identifier });
-    testLexer("<title>\n{% block title %}", &[_]Token.Kind{ .text, .tag_open, .keyword_block, .identifier, .tag_close });
-    testLexer("<title>\n{% block title %}\n{% endblock %}</title>", &[_]Token.Kind{ .text, .tag_open, .keyword_block, .identifier, .tag_close, .text, .tag_open, .keyword_endblock, .tag_close, .text });
+    testLexer("{%", &[_]Token.Kind{.statement_open});
+    testLexer("<title>\n{%", &[_]Token.Kind{ .text, .statement_open });
+    testLexer("<title>\n{% block", &[_]Token.Kind{ .text, .statement_open, .keyword_block });
+    testLexer("<title>\n{% block title", &[_]Token.Kind{ .text, .statement_open, .keyword_block, .identifier });
+    testLexer("<title>\n{% block title %}", &[_]Token.Kind{ .text, .statement_open, .keyword_block, .identifier, .statement_close });
+    testLexer("<title>\n{% block title %}\n{% endblock %}</title>", &[_]Token.Kind{ .text, .statement_open, .keyword_block, .identifier, .statement_close, .text, .statement_open, .keyword_endblock, .statement_close, .text });
     testLexer("comment test {# this is a comment #}\nrest of text", &[_]Token.Kind{ .text, .text });
+    testLexer("{{ variable_test }}", &[_]Token.Kind{ .expression_open, .identifier, .expression_close });
 }
 
 fn testLexerLineNo(source: []const u8, line_numbers: []const usize, ending_line: usize) void {
