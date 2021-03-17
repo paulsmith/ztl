@@ -1,3 +1,8 @@
+// TODO
+// - [x] add line numbers
+// - [ ] track name of file
+// - [ ] compress some of the starting tag logic
+
 const std = @import("std");
 const ascii = std.ascii;
 const testing = std.testing;
@@ -7,6 +12,7 @@ const fmt = std.fmt;
 pub const Token = struct {
     value: []const u8,
     kind: Kind,
+    line: usize,
 
     pub const Kind = enum {
         text,
@@ -36,7 +42,7 @@ pub const Token = struct {
     };
 
     pub fn dump(token: Token) void {
-        std.debug.print("{}: \"{}\"\n", .{ @tagName(token.kind), token.value });
+        std.debug.print("{}, line {}: \"{}\"\n", .{ @tagName(token.kind), token.lineno, token.value });
     }
 };
 
@@ -72,6 +78,8 @@ const Lexer = struct {
     start: usize,
     pos: usize,
     state: State,
+    line: usize,
+    startline: usize,
 
     const State = enum {
         text,
@@ -91,6 +99,8 @@ const Lexer = struct {
             .start = @as(usize, 0),
             .pos = @as(usize, 0),
             .state = .text,
+            .line = @as(usize, 1),
+            .startline = @as(usize, 1),
         };
     }
 
@@ -121,8 +131,10 @@ const Lexer = struct {
         const token = Token{
             .value = self.source[self.start..self.pos],
             .kind = kind,
+            .line = self.startline,
         };
         self.start = self.pos;
+        self.startline = self.line;
         return token;
     }
 
@@ -130,6 +142,7 @@ const Lexer = struct {
         std.debug.assert(!(self.pos > self.source.len));
         if (self.pos == self.source.len) return null;
         const c = self.source[self.pos];
+        if (c == '\n') self.line += 1;
         self.pos += 1;
         return c;
     }
@@ -140,6 +153,15 @@ const Lexer = struct {
         return in;
     }
 
+    fn backup(self: *Self) void {
+        self.pos -= 1;
+        if (self.source[self.pos] == '\n') self.line -= 1;
+    }
+
+    fn ignore(self: *Self) void {
+        self.start = self.pos;
+    }
+
     pub fn nextToken(self: *Self) Token {
         while (true) {
             switch (self.state) {
@@ -148,6 +170,7 @@ const Lexer = struct {
                         self.pos += x;
                         self.state = .tag_open;
                         if (self.pos > self.start) {
+                            self.line += mem.count(u8, self.source[self.start..self.pos], "\n");
                             return self.makeToken(.text);
                         }
                         continue;
@@ -155,6 +178,7 @@ const Lexer = struct {
                         self.pos += x;
                         self.state = .comment_open;
                         if (self.pos > self.start) {
+                            self.line += mem.count(u8, self.source[self.start..self.pos], "\n");
                             return self.makeToken(.text);
                         }
                         continue;
@@ -162,6 +186,7 @@ const Lexer = struct {
                     self.pos = self.source.len;
                     self.state = .eof;
                     if (self.pos > self.start) {
+                        self.line += mem.count(u8, self.source[self.start..self.pos], "\n");
                         return self.makeToken(.text);
                     }
                 },
@@ -181,7 +206,6 @@ const Lexer = struct {
                                 'A'...'Z', 'a'...'z', '_' => self.state = .identifier,
                                 ' ', '\t', '\r', '\n' => {
                                     while (true) {
-                                        const in = self.peekInput();
                                         if (self.peekInput()) |cc| {
                                             if (!ascii.isSpace(cc)) break;
                                         } else {
@@ -207,7 +231,7 @@ const Lexer = struct {
                             switch (c) {
                                 'A'...'Z', 'a'...'z', '_', '0'...'9' => {},
                                 else => {
-                                    self.pos -= 1;
+                                    self.backup();
                                     self.state = .inside_tag;
                                     break;
                                 },
@@ -253,6 +277,7 @@ const Lexer = struct {
         return Token{
             .value = fmt.bufPrint(error_message_buf, message, args) catch unreachable,
             .kind = .@"error",
+            .line = self.line,
         };
     }
 };
@@ -270,7 +295,7 @@ fn testLexer(source: []const u8, expected_tokens: []const Token.Kind) void {
         }
     }
     const last = lexer.nextToken();
-    std.testing.expect(last.kind == .eof);
+    std.testing.expectEqual(last.kind, .eof);
 }
 
 test "lexer - simple template" {
@@ -283,6 +308,30 @@ test "lexer - simple template" {
     testLexer("<title>\n{% block title %}", &[_]Token.Kind{ .text, .tag_open, .keyword_block, .identifier, .tag_close });
     testLexer("<title>\n{% block title %}\n{% endblock %}</title>", &[_]Token.Kind{ .text, .tag_open, .keyword_block, .identifier, .tag_close, .text, .tag_open, .keyword_endblock, .tag_close, .text });
     testLexer("comment test {# this is a comment #}\nrest of text", &[_]Token.Kind{ .text, .text });
+}
+
+fn testLexerLineNo(source: []const u8, line_numbers: []const usize, ending_line: usize) void {
+    var lexer = Lexer.init(source);
+    var it = lexer.iterator();
+    for (line_numbers) |line, i| {
+        if (it.next()) |token| {
+            std.testing.expectEqual(line, token.line);
+        } else {
+            std.debug.panic("expected a {}th token, but ran out", .{i});
+        }
+    }
+    const last = lexer.nextToken();
+    std.testing.expectEqual(last.kind, .eof);
+    std.testing.expectEqual(last.line, ending_line);
+}
+
+test "lexer - tracking line numbers" {
+    testLexerLineNo("", &[_]usize{}, 1);
+    testLexerLineNo("<title>", &[_]usize{1}, 1);
+    testLexerLineNo("<title>\n", &[_]usize{1}, 2);
+    testLexerLineNo("<title>\n{%", &[_]usize{ 1, 2 }, 2);
+    testLexerLineNo("<title>\n{% block %}", &[_]usize{ 1, 2, 2, 2 }, 2);
+    testLexerLineNo("<title>\n{% block %}\n</title>", &[_]usize{ 1, 2, 2, 2, 2 }, 3);
 }
 
 // test "lex template" {
@@ -302,3 +351,24 @@ test "lexer - simple template" {
 //         token = lexer.nextToken();
 //     }
 // }
+
+// NOTES
+//
+// token types inside tags and variables (rename to statements and expressions)
+//
+// "base.html" - string literal
+// block - keyword
+// foo - identifier
+// ( - lparen (start a function call)
+// ) - rparen
+// . - field access
+// | - pipe (filters)
+// [ - lbracket (start array index notation)
+// 0 - number literal
+// ] - rbracket
+// , - comma
+// ~ - tilde (string concatenation)
+// = - equals / assign
+// - - unary minus
+// + - * / %  - math operators
+// < > == >= <= != - comparison operators
