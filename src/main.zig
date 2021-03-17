@@ -76,6 +76,7 @@ var error_message_buffer: [100]u8 = undefined;
 const error_message_buf = error_message_buffer[0..];
 
 const Lexer = struct {
+    name: []const u8,
     source: []const u8,
     start: usize,
     pos: usize,
@@ -96,8 +97,9 @@ const Lexer = struct {
 
     const Self = @This();
 
-    pub fn init(source: []const u8) Self {
+    pub fn init(name: []const u8, source: []const u8) Self {
         return Self{
+            .name = name,
             .source = source,
             .start = @as(usize, 0),
             .pos = @as(usize, 0),
@@ -322,13 +324,13 @@ const Lexer = struct {
         return Token{
             .value = fmt.bufPrint(error_message_buf, message, args) catch unreachable,
             .kind = .@"error",
-            .line = self.line,
+            .line = self.startline,
         };
     }
 };
 
 fn testLexer(source: []const u8, expected_tokens: []const Token.Kind) void {
-    var lexer = Lexer.init(source);
+    var lexer = Lexer.init("", source);
     var it = lexer.iterator();
     for (expected_tokens) |expected, i| {
         if (it.next()) |token| {
@@ -357,7 +359,7 @@ test "lexer - simple template" {
 }
 
 fn testLexerLineNo(source: []const u8, line_numbers: []const usize, ending_line: usize) void {
-    var lexer = Lexer.init(source);
+    var lexer = Lexer.init("", source);
     var it = lexer.iterator();
     for (line_numbers) |line, i| {
         if (it.next()) |token| {
@@ -383,7 +385,7 @@ test "lexer - tracking line numbers" {
 test "lexer - error invalid closing delimiter" {
     const strings = [_][]const u8{ "{% foo }}", "{{ bar %}" };
     for (strings) |source| {
-        var lexer = Lexer.init(source);
+        var lexer = Lexer.init("", source);
         var it = lexer.iterator();
         var last: Token = undefined;
         while (it.next()) |token| {
