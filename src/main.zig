@@ -20,6 +20,7 @@ pub const Token = struct {
         comment_close,
         identifier,
         string,
+        number,
         keyword_block,
         keyword_endblock,
         keyword_extends,
@@ -86,6 +87,7 @@ const Lexer = struct {
         inside_tag,
         identifier,
         string,
+        number,
         tag_close,
         comment_open,
         eof,
@@ -204,15 +206,14 @@ const Lexer = struct {
                 },
 
                 .tag_open => {
-                    if (self.open_delim) |delim| {
-                        self.pos += mem.len(switch (delim) {
-                            .statement_open => statement_open_delim,
-                            .expression_open => expression_open_delim,
-                            else => unreachable,
-                        });
-                        self.state = .inside_tag;
-                        return self.makeToken(delim);
-                    } else std.debug.panic("invalid state, expected non-null open_delim", .{});
+                    const delim = self.open_delim orelse std.debug.panic("invariant non-null open_delim violated", .{});
+                    self.pos += mem.len(switch (delim) {
+                        .statement_open => statement_open_delim,
+                        .expression_open => expression_open_delim,
+                        else => unreachable,
+                    });
+                    self.state = .inside_tag;
+                    return self.makeToken(delim);
                 },
 
                 .inside_tag => {
@@ -221,7 +222,7 @@ const Lexer = struct {
                     // POV we need to know if the lexer's state is inside a
                     // 'tag' (a statement or expression) or in regular raw
                     // template text.
-                    const delim = self.open_delim orelse unreachable;
+                    const delim = self.open_delim orelse std.debug.panic("invariant non-null open_delim violated", .{});
                     if (mem.startsWith(u8, self.source[self.pos..], statement_close_delim)) {
                         if (delim == .expression_open) return self.@"error"("invalid closing delimiter: expected '{}', found '{}'", .{ expression_close_delim, statement_close_delim });
                         self.state = .tag_close;
@@ -244,6 +245,7 @@ const Lexer = struct {
                                     self.start = self.pos;
                                 },
                                 '"' => self.state = .string,
+                                '0'...'9' => self.state = .number,
                                 else => return self.@"error"("unexpected char '{c}'", .{c}),
                             }
                         } else {
@@ -298,22 +300,38 @@ const Lexer = struct {
                     return token;
                 },
 
+                // FIXME only supports simple integers at the moment
+                .number => {
+                    while (true) {
+                        if (self.nextInput()) |c| {
+                            if (!ascii.isDigit(c)) {
+                                self.backup();
+                                break;
+                            }
+                        } else {
+                            // TODO if EOF then the token stream does not have a closing tag
+                            break;
+                        }
+                    }
+                    self.state = .inside_tag;
+                    return self.makeToken(.number);
+                },
+
                 .tag_close => {
-                    if (self.open_delim) |delim| {
-                        self.pos += mem.len(switch (delim) {
-                            .statement_open => statement_close_delim,
-                            .expression_open => expression_close_delim,
-                            else => unreachable,
-                        });
-                        self.state = .text;
-                        const token = self.makeToken(switch (delim) {
-                            .statement_open => .statement_close,
-                            .expression_open => .expression_close,
-                            else => unreachable,
-                        });
-                        self.open_delim = null;
-                        return token;
-                    } else std.debug.panic("invalid state, expected non-null open_delim", .{});
+                    const delim = self.open_delim orelse std.debug.panic("invariant non-null open_delim violated", .{});
+                    self.pos += mem.len(switch (delim) {
+                        .statement_open => statement_close_delim,
+                        .expression_open => expression_close_delim,
+                        else => unreachable,
+                    });
+                    self.state = .text;
+                    const token = self.makeToken(switch (delim) {
+                        .statement_open => .statement_close,
+                        .expression_open => .expression_close,
+                        else => unreachable,
+                    });
+                    self.open_delim = null;
+                    return token;
                 },
 
                 .comment_open => {
@@ -422,6 +440,16 @@ test "lexer - string literals" {
     std.testing.expect(mem.eql(u8, "hello, world", token.value));
 }
 
+test "lexer - numbers" {
+    var lexer = Lexer.init("",
+        \\{% 42 %}
+    );
+    _ = lexer.nextToken();
+    const token = lexer.nextToken();
+    std.testing.expectEqual(Token.Kind.number, token.kind);
+    std.testing.expect(mem.eql(u8, "42", token.value));
+}
+
 // test "lex template" {
 //     const example =
 //         \\<ul>
@@ -447,12 +475,12 @@ test "lexer - string literals" {
 // [x] "base.html" - string literal
 // [x] block - keyword
 // [x] foo - identifier
+// [x] 123 - number
 // ( - lparen (start a function call)
 // ) - rparen
 // . - field access
 // | - pipe (filters)
 // [ - lbracket (start array index notation)
-// 0 - number literal
 // ] - rbracket
 // , - comma
 // ~ - tilde (string concatenation)
