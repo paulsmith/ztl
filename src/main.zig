@@ -19,6 +19,7 @@ pub const Token = struct {
         comment_open,
         comment_close,
         identifier,
+        string,
         keyword_block,
         keyword_endblock,
         keyword_extends,
@@ -84,6 +85,7 @@ const Lexer = struct {
         tag_open,
         inside_tag,
         identifier,
+        string,
         tag_close,
         comment_open,
         eof,
@@ -241,6 +243,7 @@ const Lexer = struct {
                                     }
                                     self.start = self.pos;
                                 },
+                                '"' => self.state = .string,
                                 else => return self.@"error"("unexpected char '{c}'", .{c}),
                             }
                         } else {
@@ -273,6 +276,26 @@ const Lexer = struct {
                         return self.makeToken(kind);
                     }
                     return self.makeToken(.identifier);
+                },
+
+                .string => {
+                    self.ignore();
+                    while (true) {
+                        if (self.nextInput()) |c| {
+                            switch (c) {
+                                '\n' => return self.@"error"("newline not allowed in string literal", .{}),
+                                '"' => break,
+                                else => {},
+                            }
+                        } else {
+                            return self.@"error"("unterminated string literal", .{});
+                        }
+                    }
+                    self.backup();
+                    const token = self.makeToken(.string);
+                    self.state = .inside_tag;
+                    _ = self.nextInput();
+                    return token;
                 },
 
                 .tag_close => {
@@ -389,6 +412,16 @@ test "lexer - error invalid closing delimiter" {
     }
 }
 
+test "lexer - string literals" {
+    var lexer = Lexer.init("",
+        \\{% "hello, world"
+    );
+    _ = lexer.nextToken();
+    const token = lexer.nextToken();
+    std.testing.expectEqual(Token.Kind.string, token.kind);
+    std.testing.expect(mem.eql(u8, "hello, world", token.value));
+}
+
 // test "lex template" {
 //     const example =
 //         \\<ul>
@@ -411,9 +444,9 @@ test "lexer - error invalid closing delimiter" {
 //
 // token types inside tags and variables (rename to statements and expressions)
 //
-// "base.html" - string literal
-// block - keyword
-// foo - identifier
+// [x] "base.html" - string literal
+// [x] block - keyword
+// [x] foo - identifier
 // ( - lparen (start a function call)
 // ) - rparen
 // . - field access
