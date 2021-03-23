@@ -8,6 +8,7 @@ const testing = std.testing;
 const mem = std.mem;
 const fmt = std.fmt;
 const assert = std.debug.assert;
+const math = std.math;
 
 pub const Token = struct {
     value: []const u8,
@@ -209,21 +210,26 @@ const Lexer = struct {
                         .{ .delimiter = comment_open_delim, .delimiter_kind = null, .next_state = .comment_open },
                     };
 
-                    var found = false;
+                    var nearest: ?OpenDelimiter = null;
+                    var distance: usize = math.maxInt(usize);
                     for (open_delimiters) |d| {
                         if (mem.indexOf(u8, self.source[self.pos..], d.delimiter)) |x| {
-                            self.pos += x;
-                            self.delim_kind = d.delimiter_kind;
-                            self.state = d.next_state;
-                            if (self.pos > self.start) {
-                                self.line += mem.count(u8, self.source[self.start..self.pos], "\n");
-                                return self.makeToken(.text);
+                            if (x < distance) {
+                                distance = x;
+                                nearest = d;
                             }
-                            found = true;
-                            break;
                         }
                     }
-                    if (found) continue;
+                    if (nearest) |d| {
+                        self.pos += distance;
+                        self.delim_kind = d.delimiter_kind;
+                        self.state = d.next_state;
+                        if (self.pos > self.start) {
+                            self.line += mem.count(u8, self.source[self.start..self.pos], "\n");
+                            return self.makeToken(.text);
+                        }
+                        continue;
+                    }
                     self.pos = self.source.len;
                     self.state = .eof;
                     if (self.pos > self.start) {
@@ -477,7 +483,7 @@ fn testLexer(source: []const u8, expected_tokens: []const Token.Kind) void {
     std.testing.expectEqual(last.kind, .eof);
 }
 
-test "lexer - simple template" {
+test "lex simple template" {
     testLexer("", &[_]Token.Kind{});
     testLexer("<title>", &[_]Token.Kind{.text});
     testLexer("{%", &[_]Token.Kind{.statement_open});
@@ -507,7 +513,7 @@ fn testLexerLineNo(source: []const u8, line_numbers: []const usize, ending_line:
     std.testing.expectEqual(last.line, ending_line);
 }
 
-test "lexer - tracking line numbers" {
+test "tracking line numbers" {
     testLexerLineNo("", &[_]usize{}, 1);
     testLexerLineNo("<title>", &[_]usize{1}, 1);
     testLexerLineNo("<title>\n", &[_]usize{1}, 2);
@@ -516,20 +522,18 @@ test "lexer - tracking line numbers" {
     testLexerLineNo("<title>\n{% block %}\n</title>", &[_]usize{ 1, 2, 2, 2, 2 }, 3);
 }
 
-test "lexer - error last token" {
+test "error last token" {
     const strings = [_][]const u8{ "{% foo }}", "{{ bar %}", "{% ( ) ) %}", "{% ( ( ) %}" };
     for (strings) |source| {
         var lexer = Lexer.init("", source);
         var it = lexer.iterator();
         var last: Token = undefined;
-        while (it.next()) |token| {
-            last = token;
-        }
+        while (it.next()) |token| last = token;
         std.testing.expectEqual(Token.Kind.@"error", last.kind);
     }
 }
 
-test "lexer - string literals" {
+test "string literals" {
     var lexer = Lexer.init("",
         \\{% "hello, world"
     );
@@ -539,7 +543,7 @@ test "lexer - string literals" {
     std.testing.expect(mem.eql(u8, "hello, world", token.value));
 }
 
-test "lexer - numbers" {
+test "numbers" {
     var lexer = Lexer.init("",
         \\{% 42 %}
     );
@@ -547,6 +551,10 @@ test "lexer - numbers" {
     const token = lexer.nextToken();
     std.testing.expectEqual(Token.Kind.number, token.kind);
     std.testing.expect(mem.eql(u8, "42", token.value));
+}
+
+test "lex next closest delimiter" {
+    testLexer("{{ foo }}{% bar %}", &[_]Token.Kind{ .expression_open, .identifier, .expression_close, .statement_open, .identifier, .statement_close });
 }
 
 // test "lex template" {
@@ -559,10 +567,7 @@ test "lexer - numbers" {
 //         \\<p>{{ a_variable }}</p>
 //         \\{# a comment #}
 //     ;
-//     var lexer = Lexer.init(example);
-//     var token = lexer.nextToken();
-//     while (token.kind != .eof) {
-//         lexer.dumpToken(token);
-//         token = lexer.nextToken();
-//     }
+//     var lexer = Lexer.init("", example);
+//     var it = lexer.iterator();
+//     while (it.next()) |token| token.dump();
 // }
