@@ -44,6 +44,7 @@ pub const Token = struct {
         equal_to,
         gt_or_equal_to,
         lt_or_equal_to,
+        not,
         not_equal,
         keyword_block,
         keyword_endblock,
@@ -298,6 +299,55 @@ const Lexer = struct {
                                 self.paren_depth -= 1;
                                 return self.makeToken(.close_paren);
                             },
+                            // TODO yes these could probably be a lookup but
+                            // unclear what the value would be
+                            '.' => return self.makeToken(.dot),
+                            '|' => return self.makeToken(.pipe),
+                            '[' => return self.makeToken(.open_bracket),
+                            ']' => return self.makeToken(.close_bracket),
+                            ',' => return self.makeToken(.comma),
+                            '~' => return self.makeToken(.tilde),
+                            '-' => return self.makeToken(.minus),
+                            '+' => return self.makeToken(.plus),
+                            '*' => return self.makeToken(.star),
+                            '/' => return self.makeToken(.forward_slash),
+                            '%' => return self.makeToken(.percent),
+                            '=' => {
+                                if (self.peekInput()) |cc| {
+                                    if (cc == '=') {
+                                        _ = self.nextInput();
+                                        return self.makeToken(.equal_to);
+                                    }
+                                }
+                                return self.makeToken(.assign);
+                            },
+                            '<' => {
+                                if (self.peekInput()) |cc| {
+                                    if (cc == '=') {
+                                        _ = self.nextInput();
+                                        return self.makeToken(.lt_or_equal_to);
+                                    }
+                                }
+                                return self.makeToken(.less_than);
+                            },
+                            '>' => {
+                                if (self.peekInput()) |cc| {
+                                    if (cc == '=') {
+                                        _ = self.nextInput();
+                                        return self.makeToken(.gt_or_equal_to);
+                                    }
+                                }
+                                return self.makeToken(.greater_than);
+                            },
+                            '!' => {
+                                if (self.peekInput()) |cc| {
+                                    if (cc == '=') {
+                                        _ = self.nextInput();
+                                        return self.makeToken(.not_equal);
+                                    }
+                                }
+                                return self.makeToken(.not);
+                            },
                             else => return self.@"error"("unexpected char '{c}'", .{c}),
                         }
                     } else {
@@ -438,7 +488,8 @@ test "lexer - simple template" {
     testLexer("<title>\n{% block title %}\n{% endblock %}</title>", &[_]Token.Kind{ .text, .statement_open, .keyword_block, .identifier, .statement_close, .text, .statement_open, .keyword_endblock, .statement_close, .text });
     testLexer("comment test {# this is a comment #}\nrest of text", &[_]Token.Kind{ .text, .text });
     testLexer("{{ variable_test }}", &[_]Token.Kind{ .expression_open, .identifier, .expression_close });
-    testLexer("{% ( ) %}", &[_]Token.Kind{ .statement_open, .open_paren, .close_paren, .statement_close });
+    testLexer("{% ( ( ) ) %}", &[_]Token.Kind{ .statement_open, .open_paren, .open_paren, .close_paren, .close_paren, .statement_close });
+    testLexer("{% . | [ ] , ~ = - + * / % < > ! == <= >= != %}", &[_]Token.Kind{ .statement_open, .dot, .pipe, .open_bracket, .close_bracket, .comma, .tilde, .assign, .minus, .plus, .star, .forward_slash, .percent, .less_than, .greater_than, .not, .equal_to, .lt_or_equal_to, .gt_or_equal_to, .not_equal, .statement_close });
 }
 
 fn testLexerLineNo(source: []const u8, line_numbers: []const usize, ending_line: usize) void {
@@ -515,24 +566,3 @@ test "lexer - numbers" {
 //         token = lexer.nextToken();
 //     }
 // }
-
-// NOTES
-//
-// token types inside tags and variables (rename to statements and expressions)
-//
-// [x] "base.html" - string literal
-// [x] block - keyword
-// [x] foo - identifier
-// [x] 123 - number
-// ( - lparen (start a function call)
-// ) - rparen (check balanced)
-// . - field access
-// | - pipe (filters)
-// [ - lbracket (start array index notation)
-// ] - rbracket
-// , - comma
-// ~ - tilde (string concatenation)
-// = - equals / assign
-// - - unary minus
-// + - * / %  - math operators
-// < > == >= <= != - comparison operators
