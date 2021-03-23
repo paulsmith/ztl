@@ -1,3 +1,7 @@
+// TODO
+//
+// - [ ] do some fuzzin'
+
 const std = @import("std");
 const ascii = std.ascii;
 const testing = std.testing;
@@ -21,6 +25,26 @@ pub const Token = struct {
         identifier,
         string,
         number,
+        open_paren,
+        close_paren,
+        dot,
+        pipe,
+        open_bracket,
+        close_bracket,
+        comma,
+        tilde,
+        assign,
+        minus,
+        plus,
+        star,
+        forward_slash,
+        percent,
+        less_than,
+        greater_than,
+        equal_to,
+        gt_or_equal_to,
+        lt_or_equal_to,
+        not_equal,
         keyword_block,
         keyword_endblock,
         keyword_extends,
@@ -79,7 +103,8 @@ const Lexer = struct {
     state: State,
     line: usize,
     startline: usize,
-    open_delim: ?Token.Kind,
+    delim_kind: ?Token.Kind,
+    paren_depth: usize,
 
     const State = enum {
         text,
@@ -104,7 +129,8 @@ const Lexer = struct {
             .state = .text,
             .line = @as(usize, 1),
             .startline = @as(usize, 1),
-            .open_delim = null,
+            .delim_kind = null,
+            .paren_depth = @as(usize, 0),
         };
     }
 
@@ -166,27 +192,27 @@ const Lexer = struct {
         self.start = self.pos;
     }
 
-    const OpenDelimiter = struct {
-        delimiter: []const u8,
-        delimiter_kind: ?Token.Kind,
-        next_state: State,
-    };
-
-    const open_delimiters = [_]OpenDelimiter{
-        .{ .delimiter = statement_open_delim, .delimiter_kind = .statement_open, .next_state = .tag_open },
-        .{ .delimiter = expression_open_delim, .delimiter_kind = .expression_open, .next_state = .tag_open },
-        .{ .delimiter = comment_open_delim, .delimiter_kind = null, .next_state = .comment_open },
-    };
-
     pub fn nextToken(self: *Self) Token {
         while (true) {
             switch (self.state) {
                 .text => {
+                    const OpenDelimiter = struct {
+                        delimiter: []const u8,
+                        delimiter_kind: ?Token.Kind,
+                        next_state: State,
+                    };
+
+                    const open_delimiters = [_]OpenDelimiter{
+                        .{ .delimiter = statement_open_delim, .delimiter_kind = .statement_open, .next_state = .tag_open },
+                        .{ .delimiter = expression_open_delim, .delimiter_kind = .expression_open, .next_state = .tag_open },
+                        .{ .delimiter = comment_open_delim, .delimiter_kind = null, .next_state = .comment_open },
+                    };
+
                     var found = false;
                     for (open_delimiters) |d| {
                         if (mem.indexOf(u8, self.source[self.pos..], d.delimiter)) |x| {
                             self.pos += x;
-                            self.open_delim = d.delimiter_kind;
+                            self.delim_kind = d.delimiter_kind;
                             self.state = d.next_state;
                             if (self.pos > self.start) {
                                 self.line += mem.count(u8, self.source[self.start..self.pos], "\n");
@@ -206,12 +232,13 @@ const Lexer = struct {
                 },
 
                 .tag_open => {
-                    const delim = self.open_delim orelse std.debug.panic("invariant non-null open_delim violated", .{});
+                    const delim = self.delim_kind orelse std.debug.panic("invariant non-null delim_kind violated", .{});
                     self.pos += mem.len(switch (delim) {
                         .statement_open => statement_open_delim,
                         .expression_open => expression_open_delim,
                         else => unreachable,
                     });
+                    self.paren_depth = 0;
                     self.state = .inside_tag;
                     return self.makeToken(delim);
                 },
@@ -222,37 +249,61 @@ const Lexer = struct {
                     // POV we need to know if the lexer's state is inside a
                     // 'tag' (a statement or expression) or in regular raw
                     // template text.
-                    const delim = self.open_delim orelse std.debug.panic("invariant non-null open_delim violated", .{});
-                    if (mem.startsWith(u8, self.source[self.pos..], statement_close_delim)) {
-                        if (delim == .expression_open) return self.@"error"("invalid closing delimiter: expected '{}', found '{}'", .{ expression_close_delim, statement_close_delim });
-                        self.state = .tag_close;
-                    } else if (mem.startsWith(u8, self.source[self.pos..], expression_close_delim)) {
-                        if (delim == .statement_open) return self.@"error"("invalid closing delimiter: expected '{}', found '{}'", .{ statement_close_delim, expression_close_delim });
-                        self.state = .tag_close;
-                    } else {
-                        if (self.nextInput()) |c| {
-                            switch (c) {
-                                'A'...'Z', 'a'...'z', '_' => self.state = .identifier,
-                                ' ', '\t', '\r', '\n' => {
-                                    while (true) {
-                                        if (self.peekInput()) |cc| {
-                                            if (!ascii.isSpace(cc)) break;
-                                        } else {
-                                            break;
-                                        }
-                                        _ = self.nextInput();
-                                    }
-                                    self.start = self.pos;
-                                },
-                                '"' => self.state = .string,
-                                '0'...'9' => self.state = .number,
-                                else => return self.@"error"("unexpected char '{c}'", .{c}),
-                            }
-                        } else {
-                            // TODO handle unclosed tag
-                            self.state = .eof;
-                            continue;
+                    const CloseDelimiter = struct {
+                        delimiter: []const u8,
+                        open_delim_kind: Token.Kind,
+                        close_delim_kind: Token.Kind,
+                    };
+
+                    const close_delimiters = [_]CloseDelimiter{
+                        .{ .delimiter = statement_close_delim, .open_delim_kind = .statement_open, .close_delim_kind = .statement_close },
+                        .{ .delimiter = expression_close_delim, .open_delim_kind = .expression_open, .close_delim_kind = .expression_close },
+                    };
+
+                    const delim = self.delim_kind orelse std.debug.panic("invariant non-null delim_kind violated", .{});
+                    var found = false;
+                    for (close_delimiters) |d| {
+                        if (mem.startsWith(u8, self.source[self.pos..], d.delimiter)) {
+                            if (delim != d.open_delim_kind) return self.@"error"("invalid closing delimiter: expected '{}', found '{}'", .{ d.open_delim_kind, @tagName(delim) });
+                            if (self.paren_depth != 0) return self.@"error"("unbalanced parens", .{});
+                            self.delim_kind = d.close_delim_kind;
+                            self.state = .tag_close;
+                            found = true;
+                            break;
                         }
+                    }
+                    if (found) continue;
+                    if (self.nextInput()) |c| {
+                        switch (c) {
+                            'A'...'Z', 'a'...'z', '_' => self.state = .identifier,
+                            ' ', '\t', '\r', '\n' => {
+                                while (true) {
+                                    if (self.peekInput()) |cc| {
+                                        if (!ascii.isSpace(cc)) break;
+                                    } else {
+                                        break;
+                                    }
+                                    _ = self.nextInput();
+                                }
+                                self.start = self.pos;
+                            },
+                            '"' => self.state = .string,
+                            '0'...'9' => self.state = .number,
+                            '(' => {
+                                self.paren_depth += 1;
+                                return self.makeToken(.open_paren);
+                            },
+                            ')' => {
+                                if (self.paren_depth == 0) return self.@"error"("unbalanced parens", .{});
+                                self.paren_depth -= 1;
+                                return self.makeToken(.close_paren);
+                            },
+                            else => return self.@"error"("unexpected char '{c}'", .{c}),
+                        }
+                    } else {
+                        // TODO handle unclosed tag
+                        self.state = .eof;
+                        continue;
                     }
                 },
 
@@ -318,19 +369,15 @@ const Lexer = struct {
                 },
 
                 .tag_close => {
-                    const delim = self.open_delim orelse std.debug.panic("invariant non-null open_delim violated", .{});
+                    const delim = self.delim_kind orelse std.debug.panic("invariant non-null delim_kind violated", .{});
                     self.pos += mem.len(switch (delim) {
-                        .statement_open => statement_close_delim,
-                        .expression_open => expression_close_delim,
+                        .statement_close => statement_close_delim,
+                        .expression_close => expression_close_delim,
                         else => unreachable,
                     });
                     self.state = .text;
-                    const token = self.makeToken(switch (delim) {
-                        .statement_open => .statement_close,
-                        .expression_open => .expression_close,
-                        else => unreachable,
-                    });
-                    self.open_delim = null;
+                    const token = self.makeToken(delim);
+                    self.delim_kind = null;
                     return token;
                 },
 
@@ -391,6 +438,7 @@ test "lexer - simple template" {
     testLexer("<title>\n{% block title %}\n{% endblock %}</title>", &[_]Token.Kind{ .text, .statement_open, .keyword_block, .identifier, .statement_close, .text, .statement_open, .keyword_endblock, .statement_close, .text });
     testLexer("comment test {# this is a comment #}\nrest of text", &[_]Token.Kind{ .text, .text });
     testLexer("{{ variable_test }}", &[_]Token.Kind{ .expression_open, .identifier, .expression_close });
+    testLexer("{% ( ) %}", &[_]Token.Kind{ .statement_open, .open_paren, .close_paren, .statement_close });
 }
 
 fn testLexerLineNo(source: []const u8, line_numbers: []const usize, ending_line: usize) void {
@@ -417,8 +465,8 @@ test "lexer - tracking line numbers" {
     testLexerLineNo("<title>\n{% block %}\n</title>", &[_]usize{ 1, 2, 2, 2, 2 }, 3);
 }
 
-test "lexer - error invalid closing delimiter" {
-    const strings = [_][]const u8{ "{% foo }}", "{{ bar %}" };
+test "lexer - error last token" {
+    const strings = [_][]const u8{ "{% foo }}", "{{ bar %}", "{% ( ) ) %}", "{% ( ( ) %}" };
     for (strings) |source| {
         var lexer = Lexer.init("", source);
         var it = lexer.iterator();
@@ -477,7 +525,7 @@ test "lexer - numbers" {
 // [x] foo - identifier
 // [x] 123 - number
 // ( - lparen (start a function call)
-// ) - rparen
+// ) - rparen (check balanced)
 // . - field access
 // | - pipe (filters)
 // [ - lbracket (start array index notation)
