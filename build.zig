@@ -6,9 +6,12 @@ pub fn build(b: *Builder) void {
     lib.setBuildMode(mode);
     lib.install();
 
-    var main_tests = b.addTest("src/lexer.zig");
-    main_tests.setBuildMode(mode);
+    var lexer_tests = b.addTest("src/lexer.zig");
+    lexer_tests.setBuildMode(mode);
+    var parser_tests = b.addTest("src/parser.zig");
+    parser_tests.setBuildMode(mode);
 
     const test_step = b.step("test", "Run library tests");
-    test_step.dependOn(&main_tests.step);
+    test_step.dependOn(&lexer_tests.step);
+    test_step.dependOn(&parser_tests.step);
 }
