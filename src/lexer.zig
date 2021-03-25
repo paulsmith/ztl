@@ -93,7 +93,7 @@ const comment_close_delim = "#}";
 var error_message_buffer: [100]u8 = undefined;
 const error_message_buf = error_message_buffer[0..];
 
-const Lexer = struct {
+pub const Lexer = struct {
     name: []const u8,
     source: []const u8,
     start: usize,
