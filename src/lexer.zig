@@ -1,7 +1,3 @@
-// TODO
-//
-// - [ ] do some fuzzin'
-
 const std = @import("std");
 const ascii = std.ascii;
 const testing = std.testing;
@@ -547,18 +543,3 @@ test "numbers" {
 test "lex next closest delimiter" {
     testLexer("{{ foo }}{% bar %}", &[_]Token.Kind{ .expression_open, .identifier, .expression_close, .statement_open, .identifier, .statement_close });
 }
-
-// test "lex template" {
-//     const example =
-//         \\<ul>
-//         \\{% for item in mylist %}
-//         \\  <li><a href="{{ item.url }}">{{ item.name }}</a></li>
-//         \\{% endfor %}
-//         \\</ul>
-//         \\<p>{{ a_variable }}</p>
-//         \\{# a comment #}
-//     ;
-//     var lexer = Lexer.init("", example);
-//     var it = lexer.iterator();
-//     while (it.next()) |token| token.dump();
-// }
