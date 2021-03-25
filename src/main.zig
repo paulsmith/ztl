@@ -251,11 +251,6 @@ const Lexer = struct {
                 },
 
                 .inside_tag => {
-                    // We test for matching correct closing delimiters here in
-                    // the lexer and not the parser because from a tokenization
-                    // POV we need to know if the lexer's state is inside a
-                    // 'tag' (a statement or expression) or in regular raw
-                    // template text.
                     const CloseDelimiter = struct {
                         delimiter: []const u8,
                         open_delim_kind: Token.Kind,
@@ -267,6 +262,24 @@ const Lexer = struct {
                         .{ .delimiter = expression_close_delim, .open_delim_kind = .expression_open, .close_delim_kind = .expression_close },
                     };
 
+                    const CompareEqOp = struct {
+                        first_char: u8,
+                        single_char_kind: Token.Kind,
+                        eq_kind: Token.Kind,
+                    };
+
+                    const compare_eq_ops = [_]CompareEqOp{
+                        .{ .first_char = '=', .single_char_kind = .assign, .eq_kind = .equal_to },
+                        .{ .first_char = '<', .single_char_kind = .less_than, .eq_kind = .lt_or_equal_to },
+                        .{ .first_char = '>', .single_char_kind = .greater_than, .eq_kind = .gt_or_equal_to },
+                        .{ .first_char = '!', .single_char_kind = .not, .eq_kind = .not_equal },
+                    };
+
+                    // We test for matching correct closing delimiters here in
+                    // the lexer and not the parser because from a tokenization
+                    // POV we need to know if the lexer's state is inside a
+                    // 'tag' (a statement or expression) or in regular raw
+                    // template text.
                     const delim = self.delim_kind orelse std.debug.panic("invariant non-null delim_kind violated", .{});
                     var found = false;
                     for (close_delimiters) |d| {
@@ -318,41 +331,19 @@ const Lexer = struct {
                             '*' => return self.makeToken(.star),
                             '/' => return self.makeToken(.forward_slash),
                             '%' => return self.makeToken(.percent),
-                            '=' => {
-                                if (self.peekInput()) |cc| {
-                                    if (cc == '=') {
-                                        _ = self.nextInput();
-                                        return self.makeToken(.equal_to);
+                            '=', '<', '>', '!' => {
+                                for (compare_eq_ops) |op| {
+                                    if (op.first_char == c) {
+                                        if (self.peekInput()) |peek| {
+                                            if (peek == '=') {
+                                                _ = self.nextInput();
+                                                return self.makeToken(op.eq_kind);
+                                            }
+                                        }
+                                        return self.makeToken(op.single_char_kind);
                                     }
                                 }
-                                return self.makeToken(.assign);
-                            },
-                            '<' => {
-                                if (self.peekInput()) |cc| {
-                                    if (cc == '=') {
-                                        _ = self.nextInput();
-                                        return self.makeToken(.lt_or_equal_to);
-                                    }
-                                }
-                                return self.makeToken(.less_than);
-                            },
-                            '>' => {
-                                if (self.peekInput()) |cc| {
-                                    if (cc == '=') {
-                                        _ = self.nextInput();
-                                        return self.makeToken(.gt_or_equal_to);
-                                    }
-                                }
-                                return self.makeToken(.greater_than);
-                            },
-                            '!' => {
-                                if (self.peekInput()) |cc| {
-                                    if (cc == '=') {
-                                        _ = self.nextInput();
-                                        return self.makeToken(.not_equal);
-                                    }
-                                }
-                                return self.makeToken(.not);
+                                unreachable;
                             },
                             else => return self.@"error"("unexpected char '{c}'", .{c}),
                         }
