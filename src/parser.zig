@@ -5,46 +5,49 @@ const lexer = @import("./lexer.zig");
 const Lexer = lexer.Lexer;
 const Token = lexer.Token;
 
-pub fn parse(allocator: *Allocator, filename: []const u8, source: []const u8) !void {
+pub fn parse(allocator: *Allocator, name: []const u8, source: []const u8) !void {
     var tokens = std.ArrayList(Token).init(allocator);
     defer tokens.deinit();
 
-    var it = Lexer.init(filename, source).iterator();
-    while (it.next()) |token| {
-        try tokens.append(token);
-    }
+    var lex = Lexer.init(name, source);
+    var it = lex.iterator();
+    while (it.next()) |token| try tokens.append(token);
 
     var parser = Parser{
+        .name = lex.name,
         .allocator = allocator,
         .source = source,
         .tokens = tokens.items,
         .current = @as(usize, 0),
+        .hadError = false,
     };
 
     try parser.parseRoot();
 }
 
-const ParseError = error{
-    EarlyEnd,
-    UnexpectedToken,
-};
+const ParseError = error{UnexpectedToken};
 
 const Parser = struct {
+    name: []const u8,
     allocator: *Allocator,
     source: []const u8,
     tokens: []const Token,
     current: usize,
+    hadError: bool,
 
     const Self = @This();
 
     fn peek(self: *Self) Token {
-        std.debug.print("peeking current token: index={} of len={}\n", .{ self.current, self.tokens.len });
         return self.tokens[self.current];
     }
 
     fn consume(self: *Self) !void {
-        if (self.isEof()) return ParseError.EarlyEnd;
         self.current += 1;
+    }
+
+    fn @"error"(self: *Self, token: Token) void {
+        std.debug.print("{}:{}: {}\n", .{ self.name, token.line, token.value });
+        self.hadError = true;
     }
 
     fn expect(self: *Self, kind: Token.Kind) !void {
@@ -65,7 +68,7 @@ const Parser = struct {
 
     fn parseStatement(self: *Self) !void {
         try self.expect(.statement_open);
-        while (!self.isKind(.statement_close)) {
+        while (!self.isEof() and !self.isKind(.statement_close)) {
             self.peek().dump();
             try self.consume();
         }
@@ -74,7 +77,7 @@ const Parser = struct {
 
     fn parseExpression(self: *Self) !void {
         try self.expect(.expression_open);
-        while (!self.isKind(.expression_close)) {
+        while (!self.isEof() and !self.isKind(.expression_close)) {
             self.peek().dump();
             try self.consume();
         }
@@ -84,7 +87,6 @@ const Parser = struct {
     fn parseRoot(self: *Self) !void {
         while (!self.isEof()) {
             if (self.isKind(.text)) {
-                // do something with a text node
                 self.peek().dump();
                 try self.consume();
             } else if (self.isKind(.statement_open)) {
@@ -101,4 +103,5 @@ const Parser = struct {
 
 test "simple parse" {
     try parse(std.testing.allocator, "", "hello {{ name }}!");
+    try parse(std.testing.allocator, "", "{% block title %}Greetings{% endblock %}");
 }

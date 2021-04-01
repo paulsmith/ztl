@@ -120,7 +120,7 @@ pub const Lexer = struct {
 
     pub fn init(name: []const u8, source: []const u8) Self {
         return Self{
-            .name = name,
+            .name = if (std.mem.eql(u8, name, "")) "<string>" else name,
             .source = source,
             .start = @as(usize, 0),
             .pos = @as(usize, 0),
