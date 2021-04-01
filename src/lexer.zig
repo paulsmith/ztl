@@ -13,10 +13,10 @@ pub const Token = struct {
 
     pub const Kind = enum {
         text,
-        statement_open,
-        statement_close,
-        expression_open,
-        expression_close,
+        block_open,
+        block_close,
+        variable_open,
+        variable_close,
         comment_open,
         comment_close,
         identifier,
@@ -83,10 +83,10 @@ const keywords = std.ComptimeStringMap(Token.Kind, .{
     .{ "or", .keyword_or },
 });
 
-const statement_open_delim = "{%";
-const statement_close_delim = "%}";
-const expression_open_delim = "{{";
-const expression_close_delim = "}}";
+const block_open_delim = "{%";
+const block_close_delim = "%}";
+const variable_open_delim = "{{";
+const variable_close_delim = "}}";
 const comment_open_delim = "{#";
 const comment_close_delim = "#}";
 
@@ -201,8 +201,8 @@ pub const Lexer = struct {
                     };
 
                     const open_delimiters = [_]OpenDelimiter{
-                        .{ .delimiter = statement_open_delim, .delimiter_kind = .statement_open, .next_state = .tag_open },
-                        .{ .delimiter = expression_open_delim, .delimiter_kind = .expression_open, .next_state = .tag_open },
+                        .{ .delimiter = block_open_delim, .delimiter_kind = .block_open, .next_state = .tag_open },
+                        .{ .delimiter = variable_open_delim, .delimiter_kind = .variable_open, .next_state = .tag_open },
                         .{ .delimiter = comment_open_delim, .delimiter_kind = null, .next_state = .comment_open },
                     };
 
@@ -237,8 +237,8 @@ pub const Lexer = struct {
                 .tag_open => {
                     const delim = self.delim_kind orelse std.debug.panic("invariant non-null delim_kind violated", .{});
                     self.pos += mem.len(switch (delim) {
-                        .statement_open => statement_open_delim,
-                        .expression_open => expression_open_delim,
+                        .block_open => block_open_delim,
+                        .variable_open => variable_open_delim,
                         else => unreachable,
                     });
                     self.paren_depth = 0;
@@ -254,8 +254,8 @@ pub const Lexer = struct {
                     };
 
                     const close_delimiters = [_]CloseDelimiter{
-                        .{ .delimiter = statement_close_delim, .open_delim_kind = .statement_open, .close_delim_kind = .statement_close },
-                        .{ .delimiter = expression_close_delim, .open_delim_kind = .expression_open, .close_delim_kind = .expression_close },
+                        .{ .delimiter = block_close_delim, .open_delim_kind = .block_open, .close_delim_kind = .block_close },
+                        .{ .delimiter = variable_close_delim, .open_delim_kind = .variable_open, .close_delim_kind = .variable_close },
                     };
 
                     const CompareEqOp = struct {
@@ -274,7 +274,7 @@ pub const Lexer = struct {
                     // We test for matching correct closing delimiters here in
                     // the lexer and not the parser because from a tokenization
                     // POV we need to know if the lexer's state is inside a
-                    // 'tag' (a statement or expression) or in regular raw
+                    // 'tag' (a block or a variable) or in regular raw
                     // template text.
                     const delim = self.delim_kind orelse std.debug.panic("invariant non-null delim_kind violated", .{});
                     var found = false;
@@ -414,8 +414,8 @@ pub const Lexer = struct {
                 .tag_close => {
                     const delim = self.delim_kind orelse std.debug.panic("invariant non-null delim_kind violated", .{});
                     self.pos += mem.len(switch (delim) {
-                        .statement_close => statement_close_delim,
-                        .expression_close => expression_close_delim,
+                        .block_close => block_close_delim,
+                        .variable_close => variable_close_delim,
                         else => unreachable,
                     });
                     self.state = .text;
@@ -473,16 +473,16 @@ fn testLexer(source: []const u8, expected_tokens: []const Token.Kind) void {
 test "lex simple template" {
     testLexer("", &[_]Token.Kind{});
     testLexer("<title>", &[_]Token.Kind{.text});
-    testLexer("{%", &[_]Token.Kind{.statement_open});
-    testLexer("<title>\n{%", &[_]Token.Kind{ .text, .statement_open });
-    testLexer("<title>\n{% block", &[_]Token.Kind{ .text, .statement_open, .keyword_block });
-    testLexer("<title>\n{% block title", &[_]Token.Kind{ .text, .statement_open, .keyword_block, .identifier });
-    testLexer("<title>\n{% block title %}", &[_]Token.Kind{ .text, .statement_open, .keyword_block, .identifier, .statement_close });
-    testLexer("<title>\n{% block title %}\n{% endblock %}</title>", &[_]Token.Kind{ .text, .statement_open, .keyword_block, .identifier, .statement_close, .text, .statement_open, .keyword_endblock, .statement_close, .text });
+    testLexer("{%", &[_]Token.Kind{.block_open});
+    testLexer("<title>\n{%", &[_]Token.Kind{ .text, .block_open });
+    testLexer("<title>\n{% block", &[_]Token.Kind{ .text, .block_open, .keyword_block });
+    testLexer("<title>\n{% block title", &[_]Token.Kind{ .text, .block_open, .keyword_block, .identifier });
+    testLexer("<title>\n{% block title %}", &[_]Token.Kind{ .text, .block_open, .keyword_block, .identifier, .block_close });
+    testLexer("<title>\n{% block title %}\n{% endblock %}</title>", &[_]Token.Kind{ .text, .block_open, .keyword_block, .identifier, .block_close, .text, .block_open, .keyword_endblock, .block_close, .text });
     testLexer("comment test {# this is a comment #}\nrest of text", &[_]Token.Kind{ .text, .text });
-    testLexer("{{ variable_test }}", &[_]Token.Kind{ .expression_open, .identifier, .expression_close });
-    testLexer("{% ( ( ) ) %}", &[_]Token.Kind{ .statement_open, .open_paren, .open_paren, .close_paren, .close_paren, .statement_close });
-    testLexer("{% . | [ ] , ~ = - + * / % < > ! == <= >= != %}", &[_]Token.Kind{ .statement_open, .dot, .pipe, .open_bracket, .close_bracket, .comma, .tilde, .assign, .minus, .plus, .star, .forward_slash, .percent, .less_than, .greater_than, .not, .equal_to, .lt_or_equal_to, .gt_or_equal_to, .not_equal, .statement_close });
+    testLexer("{{ variable_test }}", &[_]Token.Kind{ .variable_open, .identifier, .variable_close });
+    testLexer("{% ( ( ) ) %}", &[_]Token.Kind{ .block_open, .open_paren, .open_paren, .close_paren, .close_paren, .block_close });
+    testLexer("{% . | [ ] , ~ = - + * / % < > ! == <= >= != %}", &[_]Token.Kind{ .block_open, .dot, .pipe, .open_bracket, .close_bracket, .comma, .tilde, .assign, .minus, .plus, .star, .forward_slash, .percent, .less_than, .greater_than, .not, .equal_to, .lt_or_equal_to, .gt_or_equal_to, .not_equal, .block_close });
 }
 
 fn testLexerLineNo(source: []const u8, line_numbers: []const usize, ending_line: usize) void {
@@ -541,5 +541,5 @@ test "numbers" {
 }
 
 test "lex next closest delimiter" {
-    testLexer("{{ foo }}{% bar %}", &[_]Token.Kind{ .expression_open, .identifier, .expression_close, .statement_open, .identifier, .statement_close });
+    testLexer("{{ foo }}{% bar %}", &[_]Token.Kind{ .variable_open, .identifier, .variable_close, .block_open, .identifier, .block_close });
 }

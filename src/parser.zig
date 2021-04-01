@@ -5,6 +5,14 @@ const lexer = @import("./lexer.zig");
 const Lexer = lexer.Lexer;
 const Token = lexer.Token;
 
+const Statement = union(enum) {
+    block: struct {
+        id: []const u8,
+        body: []Statement,
+    },
+    expr: void,
+};
+
 pub fn parse(allocator: *Allocator, name: []const u8, source: []const u8) !void {
     var tokens = std.ArrayList(Token).init(allocator);
     defer tokens.deinit();
@@ -20,9 +28,26 @@ pub fn parse(allocator: *Allocator, name: []const u8, source: []const u8) !void 
         .tokens = tokens.items,
         .current = @as(usize, 0),
         .hadError = false,
+        .endBlockTag = null,
     };
 
-    try parser.parseRoot();
+    const stmts = parser.parseRoot() catch |err| {
+        std.debug.print("parse error: {} current: {}\n", .{ err, parser.peek() });
+        return;
+    };
+    defer { // FIXME put this logic in a custom dealloc hanging on Statement type
+        for (stmts) |stmt| {
+            switch (stmt) {
+                .block => |block| allocator.free(block.body),
+                else => {},
+            }
+        }
+        allocator.free(stmts);
+    }
+
+    for (stmts) |stmt| {
+        std.debug.print("{}\n", .{stmt});
+    }
 }
 
 const ParseError = error{UnexpectedToken};
@@ -34,6 +59,7 @@ const Parser = struct {
     tokens: []const Token,
     current: usize,
     hadError: bool,
+    endBlockTag: ?Token.Kind,
 
     const Self = @This();
 
@@ -41,7 +67,11 @@ const Parser = struct {
         return self.tokens[self.current];
     }
 
-    fn consume(self: *Self) !void {
+    fn previous(self: *Self) Token {
+        return self.tokens[self.current - 1];
+    }
+
+    fn consume(self: *Self) ParseError!void {
         self.current += 1;
     }
 
@@ -50,7 +80,7 @@ const Parser = struct {
         self.hadError = true;
     }
 
-    fn expect(self: *Self, kind: Token.Kind) !void {
+    fn expect(self: *Self, kind: Token.Kind) ParseError!void {
         if (self.isKind(kind)) {
             try self.consume();
         } else {
@@ -66,42 +96,83 @@ const Parser = struct {
         return self.current >= self.tokens.len;
     }
 
-    fn parseStatement(self: *Self) !void {
-        try self.expect(.statement_open);
-        while (!self.isEof() and !self.isKind(.statement_close)) {
+    fn parseBlock(self: *Self) ParseError!Statement {
+        try self.expect(.keyword_block);
+        try self.expect(.identifier);
+        const id = self.previous().value;
+        try self.expect(.block_close);
+        self.endBlockTag = .keyword_endblock;
+        const body = try self.parseRoot();
+        try self.expect(.block_close);
+        return Statement{
+            .block = .{ .id = id, .body = body },
+        };
+    }
+
+    fn parseStatement(self: *Self) ParseError!?Statement {
+        try self.expect(.block_open);
+        const token = self.peek();
+        if (self.endBlockTag == token.kind) {
+            try self.consume();
+            return null;
+        }
+        switch (token.kind) {
+            .keyword_block => return try self.parseBlock(),
+            .keyword_extends => unreachable,
+            .keyword_for => unreachable,
+            .keyword_if => unreachable,
+            .keyword_elif => unreachable,
+            .keyword_else => unreachable,
+            else => {
+                if (token.kind == .identifier) {
+                    // TODO support extensions
+                }
+                return ParseError.UnexpectedToken;
+            },
+        }
+        return true;
+    }
+
+    fn parseExpression(self: *Self) ParseError!void {
+        try self.expect(.variable_open);
+        while (!self.isEof() and !self.isKind(.variable_close)) {
             self.peek().dump();
             try self.consume();
         }
-        try self.expect(.statement_close);
+        try self.expect(.variable_close);
     }
 
-    fn parseExpression(self: *Self) !void {
-        try self.expect(.expression_open);
-        while (!self.isEof() and !self.isKind(.expression_close)) {
-            self.peek().dump();
-            try self.consume();
-        }
-        try self.expect(.expression_close);
-    }
-
-    fn parseRoot(self: *Self) !void {
+    fn parseRoot(self: *Self) ParseError![]Statement {
+        var stmt_list = std.ArrayList(Statement).init(self.allocator);
         while (!self.isEof()) {
             if (self.isKind(.text)) {
                 self.peek().dump();
                 try self.consume();
-            } else if (self.isKind(.statement_open)) {
-                try self.parseStatement();
-            } else if (self.isKind(.expression_open)) {
-                try self.parseExpression();
+            } else if (self.isKind(.block_open)) {
+                const stmt = try self.parseStatement();
+                if (stmt == null) break;
+                stmt_list.append(stmt.?) catch unreachable; // FIXME
+            } else if (self.isKind(.variable_open)) {
+                _ = try self.parseExpression();
+                stmt_list.append(Statement.expr) catch unreachable; // FIXME
             } else {
                 // this is a parse error, unexpected token kind
                 return ParseError.UnexpectedToken;
             }
         }
+        return stmt_list.toOwnedSlice();
     }
 };
 
 test "simple parse" {
     try parse(std.testing.allocator, "", "hello {{ name }}!");
     try parse(std.testing.allocator, "", "{% block title %}Greetings{% endblock %}");
+    try parse(std.testing.allocator, "",
+        \\
+        \\{% block title %}Greetings{% endblock %}
+        \\
+        \\{% block body %}
+        \\  Hello, {{ name }}!
+        \\{% endblock %}
+    );
 }
