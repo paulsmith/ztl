@@ -6,10 +6,12 @@ const Lexer = lexer.Lexer;
 const Token = lexer.Token;
 
 const Statement = union(enum) {
+    output: []const u8,
     block: struct {
         id: []const u8,
         body: []Statement,
     },
+    extends: []const u8,
     expr: void,
 };
 
@@ -109,6 +111,15 @@ const Parser = struct {
         };
     }
 
+    fn parseExtends(self: *Self) ParseError!Statement {
+        try self.expect(.keyword_extends);
+        // TODO can parse an identifier instead
+        try self.expect(.string);
+        const extends = self.previous().value;
+        try self.expect(.block_close);
+        return Statement{ .extends = extends };
+    }
+
     fn parseStatement(self: *Self) ParseError!?Statement {
         try self.expect(.block_open);
         const token = self.peek();
@@ -118,7 +129,7 @@ const Parser = struct {
         }
         switch (token.kind) {
             .keyword_block => return try self.parseBlock(),
-            .keyword_extends => unreachable,
+            .keyword_extends => return try self.parseExtends(),
             .keyword_for => unreachable,
             .keyword_if => unreachable,
             .keyword_elif => unreachable,
@@ -146,8 +157,9 @@ const Parser = struct {
         var stmt_list = std.ArrayList(Statement).init(self.allocator);
         while (!self.isEof()) {
             if (self.isKind(.text)) {
-                self.peek().dump();
+                const stmt = Statement{ .output = self.peek().value };
                 try self.consume();
+                stmt_list.append(stmt) catch unreachable; // FIXME
             } else if (self.isKind(.block_open)) {
                 const stmt = try self.parseStatement();
                 if (stmt == null) break;
