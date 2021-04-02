@@ -1,4 +1,6 @@
-// TODO: write a grammar for the template language
+// TODO:
+// - [ ] write a grammar for the template language
+// - [ ] implement a toString() method for Statement
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const lexer = @import("./lexer.zig");
@@ -12,6 +14,11 @@ const Statement = union(enum) {
         body: []Statement,
     },
     extends: []const u8,
+    @"for": struct {
+        element: []const u8,
+        collection: []const u8,
+        body: []Statement,
+    },
     expr: void,
 };
 
@@ -41,6 +48,7 @@ pub fn parse(allocator: *Allocator, name: []const u8, source: []const u8) !void 
         for (stmts) |stmt| {
             switch (stmt) {
                 .block => |block| allocator.free(block.body),
+                .@"for" => |@"for"| allocator.free(@"for".body),
                 else => {},
             }
         }
@@ -105,7 +113,7 @@ const Parser = struct {
         try self.expect(.block_close);
         self.endBlockTag = .keyword_endblock;
         const body = try self.parseRoot();
-        try self.expect(.block_close);
+        try self.expect(.block_close); // FIXME should be consumed in parseRoot?
         return Statement{
             .block = .{ .id = id, .body = body },
         };
@@ -120,6 +128,22 @@ const Parser = struct {
         return Statement{ .extends = extends };
     }
 
+    fn parseFor(self: *Self) ParseError!Statement {
+        try self.expect(.keyword_for);
+        try self.expect(.identifier);
+        const element = self.previous().value;
+        try self.expect(.keyword_in);
+        try self.expect(.identifier);
+        const collection = self.previous().value;
+        try self.expect(.block_close);
+        self.endBlockTag = .keyword_endfor;
+        const body = try self.parseRoot();
+        try self.expect(.block_close); // FIXME same as above
+        return Statement{
+            .@"for" = .{ .collection = collection, .element = element, .body = body },
+        };
+    }
+
     fn parseStatement(self: *Self) ParseError!?Statement {
         try self.expect(.block_open);
         const token = self.peek();
@@ -130,10 +154,8 @@ const Parser = struct {
         switch (token.kind) {
             .keyword_block => return try self.parseBlock(),
             .keyword_extends => return try self.parseExtends(),
-            .keyword_for => unreachable,
+            .keyword_for => return try self.parseFor(),
             .keyword_if => unreachable,
-            .keyword_elif => unreachable,
-            .keyword_else => unreachable,
             else => {
                 if (token.kind == .identifier) {
                     // TODO support extensions
@@ -186,5 +208,14 @@ test "simple parse" {
         \\{% block body %}
         \\  Hello, {{ name }}!
         \\{% endblock %}
+    );
+    try parse(std.testing.allocator, "",
+        \\{% extends "base.html" %}
+    );
+    try parse(std.testing.allocator, "",
+        \\<ul>
+        \\{% for name in name_list %}
+        \\  <li>{{ name }}</li>
+        \\{% endfor %}
     );
 }
