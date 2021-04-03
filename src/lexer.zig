@@ -57,6 +57,7 @@ pub const Token = struct {
         keyword_not,
         keyword_and,
         keyword_or,
+        keyword_raw,
         @"error",
         eof,
     };
@@ -81,6 +82,7 @@ const keywords = std.ComptimeStringMap(Token.Kind, .{
     .{ "not", .keyword_not },
     .{ "and", .keyword_and },
     .{ "or", .keyword_or },
+    .{ "raw", .keyword_raw },
 });
 
 const block_open_delim = "{%";
