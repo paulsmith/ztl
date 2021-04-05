@@ -26,8 +26,8 @@ const Expression = union(enum) {
     fn destroy(self: *Self, allocator: *Allocator) void {
         switch (self.*) {
             .bin_op => |val| {
-                allocator.destroy(val.lhs);
-                allocator.destroy(val.rhs);
+                val.lhs.destroy(allocator);
+                val.rhs.destroy(allocator);
             },
             else => {},
         }
@@ -162,11 +162,16 @@ pub fn parse(allocator: *Allocator, name: []const u8, source: []const u8) !void 
         .current = @as(usize, 0),
         .hadError = false,
         .endBlockTag = null,
+        .stmts = std.ArrayList(*Statement).init(allocator),
     };
 
     const stmts = parser.parseRoot() catch |err| {
-        std.debug.print("parse error: {} current: {}\n", .{ err, parser.peek() });
-        return;
+        std.debug.print("caught parser error, current token: {}\n", .{parser.peek()});
+        for (parser.stmts.items) |stmt| {
+            stmt.destroy(allocator);
+        }
+        parser.stmts.deinit();
+        return err;
     };
 
     for (stmts) |stmt| {
@@ -186,6 +191,7 @@ const Parser = struct {
     current: usize,
     hadError: bool,
     endBlockTag: ?Token.Kind,
+    stmts: std.ArrayList(*Statement), // holds in-progress parse results
 
     const Self = @This();
 
@@ -198,6 +204,7 @@ const Parser = struct {
     }
 
     fn consume(self: *Self) !void {
+        self.peek().dump();
         self.current += 1;
     }
 
@@ -247,7 +254,7 @@ const Parser = struct {
         try self.expect(.identifier); // TODO support parsing key,val from a map
         const element = self.previous().value;
         try self.expect(.keyword_in);
-        const collection = try self.parseExpr(1);
+        const collection = try self.parseExpression(@enumToInt(Precedence.lowest));
         try self.expect(.block_close);
         self.endBlockTag = .keyword_endfor;
         const body = try self.parseRoot();
@@ -257,7 +264,7 @@ const Parser = struct {
 
     fn parseIf(self: *Self) Error!*Statement {
         try self.expect(.keyword_if);
-        const pred = try self.parseExpr(1);
+        const pred = try self.parseExpression(@enumToInt(Precedence.lowest));
         try self.expect(.block_close);
         self.endBlockTag = .keyword_endif;
         const body = try self.parseRoot();
@@ -268,7 +275,7 @@ const Parser = struct {
     fn parseAtom(self: *Self) Error!*Expression {
         if (self.isKind(.open_paren)) {
             try self.consume();
-            const expr = self.parseExpr(1);
+            const expr = try self.parseExpression(@enumToInt(Precedence.lowest));
             try self.expect(.close_paren);
             return expr;
         } else if (self.isKind(.number)) {
@@ -292,39 +299,62 @@ const Parser = struct {
         return bin_ops.has(op);
     }
 
-    fn getBinOp(op: []const u8) BinOp {
+    fn getOpInfo(op: []const u8) OpInfo {
         return bin_ops.get(op).?;
     }
 
-    const BinOp = struct {
-        op: []const u8,
+    const OpInfo = struct {
         assoc: enum {
             left,
             right,
-        },
-        prec: usize,
+        }, prec: Precedence
+    };
+
+    const Precedence = enum(u8) {
+        lowest,
+        assignment, // =
+        @"or", // or
+        @"and", // and
+        equality, // == !=
+        comparison, // < > <= >=
+        addition, // + -
+        multiplication, // * / %
     };
 
     // FIXME map from token kind instead of strings, maybe? who cares
-    const bin_ops = std.ComptimeStringMap(BinOp, .{
-        .{ "and", .{ .op = "and", .assoc = .left, .prec = 1 } },
-        .{ "or", .{ .op = "or", .assoc = .left, .prec = 2 } },
-        .{ "+", .{ .op = "+", .assoc = .left, .prec = 3 } },
-        .{ "-", .{ .op = "-", .assoc = .left, .prec = 3 } },
-        .{ "*", .{ .op = "*", .assoc = .left, .prec = 4 } },
-        .{ "/", .{ .op = "/", .assoc = .left, .prec = 4 } },
-        .{ "%", .{ .op = "%", .assoc = .left, .prec = 4 } },
+    const bin_ops = std.ComptimeStringMap(OpInfo, .{
+        .{ "and", .{ .assoc = .left, .prec = .@"and" } },
+        .{ "or", .{ .assoc = .left, .prec = .@"or" } },
+        .{ "==", .{ .assoc = .left, .prec = .equality } },
+        .{ "!=", .{ .assoc = .left, .prec = .equality } },
+        .{ "<", .{ .assoc = .left, .prec = .comparison } },
+        .{ ">", .{ .assoc = .left, .prec = .comparison } },
+        .{ "<=", .{ .assoc = .left, .prec = .comparison } },
+        .{ ">=", .{ .assoc = .left, .prec = .comparison } },
+        .{ "+", .{ .assoc = .left, .prec = .addition } },
+        .{ "-", .{ .assoc = .left, .prec = .addition } },
+        .{ "*", .{ .assoc = .left, .prec = .multiplication } },
+        .{ "/", .{ .assoc = .left, .prec = .multiplication } },
+        .{ "%", .{ .assoc = .left, .prec = .multiplication } },
     });
 
-    fn parseExpr(self: *Self, min_prec: usize) Error!*Expression {
+    var levels: usize = 0;
+
+    fn parseExpression(self: *Self, min_prec: u8) Error!*Expression {
         var result = try self.parseAtom();
+        errdefer result.destroy(self.allocator);
         while (isBinOp(self.peek().value)) {
-            const op = getBinOp(self.peek().value);
-            if (op.prec < min_prec) break;
-            var next_prec = op.prec;
-            if (op.assoc == .left) next_prec += 1;
-            const rhs = try self.parseExpr(next_prec);
-            result = try Expression.binOp(self.allocator, op.op, result, rhs);
+            const op = self.peek().value;
+            const op_info = getOpInfo(op);
+            const prec = @enumToInt(op_info.prec);
+            if (prec < min_prec) break;
+            try self.consume();
+            var next_prec = prec;
+            if (op_info.assoc == .left) next_prec += 1;
+            levels += 1;
+            const rhs = try self.parseExpression(next_prec);
+            levels -= 1;
+            result = try Expression.binOp(self.allocator, op, result, rhs);
         }
         return result;
     }
@@ -351,33 +381,32 @@ const Parser = struct {
         return true;
     }
 
-    fn parseExpression(self: *Self) !*Statement {
+    fn parseExpressionStatement(self: *Self) !*Statement {
         try self.expect(.variable_open);
-        const expr = try self.parseExpr(1);
+        const expr = try self.parseExpression(@enumToInt(Precedence.lowest));
         try self.expect(.variable_close);
         return try Statement.expression(self.allocator, expr);
     }
 
     fn parseRoot(self: *Self) ![]*Statement {
-        var stmt_list = std.ArrayList(*Statement).init(self.allocator);
         while (!self.isEof()) {
             if (self.isKind(.text)) {
                 const stmt = try Statement.output(self.allocator, self.peek().value);
                 try self.consume();
-                stmt_list.append(stmt) catch unreachable; // FIXME
+                try self.stmts.append(stmt);
             } else if (self.isKind(.block_open)) {
                 const stmt = try self.parseStatement();
                 if (stmt == null) break;
-                stmt_list.append(stmt.?) catch unreachable; // FIXME
+                try self.stmts.append(stmt.?);
             } else if (self.isKind(.variable_open)) {
-                const stmt = try self.parseExpression();
-                stmt_list.append(stmt) catch unreachable; // FIXME
+                const stmt = try self.parseExpressionStatement();
+                try self.stmts.append(stmt);
             } else {
                 // this is a parse error, unexpected token kind
                 return error.ParseError;
             }
         }
-        return stmt_list.toOwnedSlice();
+        return self.stmts.toOwnedSlice();
     }
 };
 
@@ -401,5 +430,5 @@ test "simple parse" {
         \\  <li>{{ name }}</li>
         \\{% endfor %}
     );
-    if (false) {}
+    try parse(std.testing.allocator, "", "{% if 2 + 5 < 8 and 6 * 7 > 41 %}ok{% endif %}");
 }
