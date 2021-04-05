@@ -23,7 +23,7 @@ const Expression = union(enum) {
 
     const Self = @This();
 
-    fn free(self: *Self, allocator: *Allocator) void {
+    fn destroy(self: *Self, allocator: *Allocator) void {
         switch (self.*) {
             .bin_op => |val| {
                 allocator.destroy(val.lhs);
@@ -85,23 +85,23 @@ const Statement = union(enum) {
 
     const Self = @This();
 
-    fn free(self: *Self, allocator: *Allocator) void {
+    fn destroy(self: *Self, allocator: *Allocator) void {
         switch (self.*) {
             .block => |val| {
-                for (val.body) |stmt| stmt.free(allocator);
+                for (val.body) |stmt| stmt.destroy(allocator);
                 allocator.free(val.body);
             },
             .@"for" => |val| {
-                val.collection.free(allocator);
-                for (val.body) |stmt| stmt.free(allocator);
+                val.collection.destroy(allocator);
+                for (val.body) |stmt| stmt.destroy(allocator);
                 allocator.free(val.body);
             },
             .@"if" => |val| {
-                val.predicate.free(allocator);
-                for (val.consequent) |stmt| stmt.free(allocator);
+                val.predicate.destroy(allocator);
+                for (val.consequent) |stmt| stmt.destroy(allocator);
                 allocator.free(val.consequent);
             },
-            .expr => |val| val.free(allocator),
+            .expr => |val| val.destroy(allocator),
             else => {},
         }
         allocator.destroy(self);
@@ -171,7 +171,7 @@ pub fn parse(allocator: *Allocator, name: []const u8, source: []const u8) !void 
 
     for (stmts) |stmt| {
         std.debug.print("{}\n", .{stmt});
-        stmt.free(allocator);
+        stmt.destroy(allocator);
     }
     allocator.free(stmts);
 }
