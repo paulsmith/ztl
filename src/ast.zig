@@ -3,7 +3,7 @@ const Allocator = std.mem.Allocator;
 
 pub const Expression = union(enum) {
     number: []const u8,
-    ident: []const u8,
+    name: []const u8,
     string: []const u8,
     bin_op: struct {
         op: []const u8,
@@ -26,10 +26,22 @@ pub const Expression = union(enum) {
 
     fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) std.os.WriteError!void {
         switch (self) {
-            .number => {},
-            .ident => {},
-            .string => {},
-            .bin_op => {},
+            .number => {
+                try std.fmt.format(writer, "number={}", .{self.number});
+            },
+            .name => {
+                try std.fmt.format(writer, "name={}", .{self.name});
+            },
+            .string => {
+                try std.fmt.format(writer, "string=\"{}\"", .{self.string});
+            },
+            .bin_op => {
+                try std.fmt.format(writer, "(", .{});
+                try self.bin_op.lhs.format(fmt, options, writer);
+                try std.fmt.format(writer, " {} ", .{self.bin_op.op});
+                try self.bin_op.rhs.format(fmt, options, writer);
+                try std.fmt.format(writer, ")", .{});
+            },
         }
     }
 
@@ -41,9 +53,9 @@ pub const Expression = union(enum) {
         return expr;
     }
 
-    pub fn ident(allocator: *Allocator, id: []const u8) !*Self {
+    pub fn name(allocator: *Allocator, id: []const u8) !*Self {
         const expr = try allocator.create(Self);
-        expr.* = .{ .ident = id };
+        expr.* = .{ .name = id };
         return expr;
     }
 
@@ -65,7 +77,7 @@ pub const Statement = union(enum) {
         text: []const u8,
     },
     block: struct {
-        id: []const u8,
+        name: []const u8,
         body: []*Statement,
     },
     extends: struct {
@@ -113,10 +125,10 @@ pub const Statement = union(enum) {
                 const len = std.math.min(self.output.text.len, 10);
                 const dots = if (len < self.output.text.len) "..." else "";
                 _ = std.mem.replace(u8, self.output.text[0..len], "\n", "\\n", snippet[0..]);
-                try std.fmt.format(writer, "Output[\"{}{}\"]", .{ snippet, dots });
+                try std.fmt.format(writer, "Output[text=\"{}{}\"]", .{ snippet, dots });
             },
             .block => {
-                try std.fmt.format(writer, "Block[", .{});
+                try std.fmt.format(writer, "Block[name={} ", .{self.block.name});
                 for (self.block.body) |stmt, i| {
                     try stmt.format(fmt, options, writer);
                     if (i < self.block.body.len - 1) try std.fmt.format(writer, ", ", .{});
@@ -124,27 +136,27 @@ pub const Statement = union(enum) {
                 try std.fmt.format(writer, "]", .{});
             },
             .extends => {
-                try std.fmt.format(writer, "Extends[\"{}\"]", .{self.extends.filename});
+                try std.fmt.format(writer, "Extends[filename=\"{}\"]", .{self.extends.filename});
             },
             .@"for" => {
                 try std.fmt.format(writer, "For[collection=", .{});
                 try self.@"for".collection.format(fmt, options, writer);
-                try std.fmt.format(writer, " ", .{});
+                try std.fmt.format(writer, " body=[", .{});
                 for (self.@"for".body) |stmt, i| {
                     try stmt.format(fmt, options, writer);
                     if (i < self.@"for".body.len - 1) try std.fmt.format(writer, ", ", .{});
                 }
-                try std.fmt.format(writer, "]", .{});
+                try std.fmt.format(writer, "]]", .{});
             },
             .@"if" => {
                 try std.fmt.format(writer, "If[predicate=", .{});
                 try self.@"if".predicate.format(fmt, options, writer);
-                try std.fmt.format(writer, " ", .{});
+                try std.fmt.format(writer, " consequent=[", .{});
                 for (self.@"if".consequent) |stmt, i| {
                     try stmt.format(fmt, options, writer);
                     if (i < self.@"if".consequent.len - 1) try std.fmt.format(writer, ", ", .{});
                 }
-                try std.fmt.format(writer, "]", .{});
+                try std.fmt.format(writer, "]]", .{});
             },
             .expr => {
                 try std.fmt.format(writer, "Expr[", .{});
@@ -162,9 +174,9 @@ pub const Statement = union(enum) {
         return stmt;
     }
 
-    pub fn block(allocator: *Allocator, id: []const u8, body: []*Statement) !*Self {
+    pub fn block(allocator: *Allocator, name: []const u8, body: []*Statement) !*Self {
         const stmt = try allocator.create(Self);
-        stmt.* = .{ .block = .{ .id = id, .body = body } };
+        stmt.* = .{ .block = .{ .name = name, .body = body } };
         return stmt;
     }
 

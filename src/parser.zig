@@ -94,12 +94,12 @@ const Parser = struct {
     fn parseBlock(self: *Self) Error!*Statement {
         try self.expect(.keyword_block);
         try self.expect(.identifier);
-        const id = self.previous().value;
+        const name = self.previous().value;
         try self.expect(.block_close);
         self.endBlockTag = .keyword_endblock;
         const body = try self.parseRoot();
         try self.expect(.block_close); // FIXME should be consumed in parseRoot?
-        return Statement.block(self.allocator, id, body);
+        return Statement.block(self.allocator, name, body);
     }
 
     fn parseExtends(self: *Self) Error!*Statement {
@@ -145,7 +145,7 @@ const Parser = struct {
             try self.consume();
             return expr;
         } else if (self.isKind(.identifier)) {
-            const expr = try Expression.ident(self.allocator, self.peek().value);
+            const expr = try Expression.name(self.allocator, self.peek().value);
             try self.consume();
             return expr;
         } else if (self.isKind(.string)) {
