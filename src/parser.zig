@@ -10,13 +10,14 @@ const Token = lexer.Token;
 const ast = @import("./ast.zig");
 const Expression = ast.Expression;
 const Statement = ast.Statement;
+const Tree = ast.Tree;
 
 // Change the allocators to handles and do central memory management
 // https://floooh.github.io/2018/06/17/handles-vs-pointers.html
 
 const Error = error{ParseError} || Allocator.Error;
 
-pub fn parse(allocator: *Allocator, name: []const u8, source: []const u8) Error!void {
+pub fn parse(allocator: *Allocator, name: []const u8, source: []const u8) !Tree {
     var tokens = std.ArrayList(Token).init(allocator);
     defer tokens.deinit();
 
@@ -39,11 +40,12 @@ pub fn parse(allocator: *Allocator, name: []const u8, source: []const u8) Error!
         return err;
     };
 
-    for (stmts) |stmt| {
-        std.debug.print("{}\n", .{stmt});
-        stmt.destroy(allocator);
-    }
-    allocator.free(stmts);
+    const tree = Tree{
+        .stmts = stmts,
+        .allocator = allocator,
+    };
+
+    return tree;
 }
 
 const Parser = struct {
@@ -269,25 +271,30 @@ const Parser = struct {
     }
 };
 
+fn testParse(source: []const u8) !void {
+    var tree = try parse(std.testing.allocator, "", source);
+    for (tree.stmts) |stmt| std.debug.print("{}\n", .{stmt});
+    tree.destroy();
+}
+
 test "simple parse" {
-    try parse(std.testing.allocator, "", "hello {{ name }}!");
-    try parse(std.testing.allocator, "", "{% block title %}Greetings{% endblock %}");
-    try parse(std.testing.allocator, "",
-        \\
+    try testParse("hello {{ name }}!");
+    try testParse("{% block title %}Greetings{% endblock %}");
+    try testParse(
         \\{% block title %}Greetings{% endblock %}
         \\
         \\{% block body %}
         \\  Hello, {{ name }}!
         \\{% endblock %}
     );
-    try parse(std.testing.allocator, "",
+    try testParse(
         \\{% extends "base.html" %}
     );
-    try parse(std.testing.allocator, "",
+    try testParse(
         \\<ul>
         \\{% for name in name_list %}
         \\  <li>{{ name }}</li>
         \\{% endfor %}
     );
-    try parse(std.testing.allocator, "", "{% if 2 + 5 < 8 and 6 * 7 > 41 %}ok{% endif %}");
+    try testParse("{% if 2 + 5 < 8 and 6 * 7 > 41 %}ok{% endif %}");
 }

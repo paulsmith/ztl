@@ -204,3 +204,17 @@ pub const Statement = union(enum) {
         return stmt;
     }
 };
+
+pub const Tree = struct {
+    stmts: []*Statement,
+    allocator: *Allocator,
+
+    const Self = @This();
+
+    pub fn destroy(self: *Self) void {
+        for (self.stmts) |stmt| {
+            stmt.destroy(self.allocator);
+        }
+        self.allocator.free(self.stmts);
+    }
+};
