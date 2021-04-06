@@ -200,8 +200,6 @@ const Parser = struct {
         .{ "%", .{ .assoc = .left, .prec = .multiplication } },
     });
 
-    var levels: usize = 0;
-
     fn parseExpression(self: *Self, min_prec: u8) Error!*Expression {
         var result = try self.parseAtom();
         errdefer result.destroy(self.allocator);
@@ -213,9 +211,7 @@ const Parser = struct {
             try self.consume();
             var next_prec = prec;
             if (op_info.assoc == .left) next_prec += 1;
-            levels += 1;
             const rhs = try self.parseExpression(next_prec);
-            levels -= 1;
             result = try Expression.binOp(self.allocator, op, result, rhs);
         }
         return result;
