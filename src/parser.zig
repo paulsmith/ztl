@@ -30,15 +30,10 @@ pub fn parse(allocator: *Allocator, name: []const u8, source: []const u8) !void 
         .current = @as(usize, 0),
         .hadError = false,
         .endBlockTag = null,
-        .stmts = std.ArrayList(*Statement).init(allocator),
     };
 
     const stmts = parser.parseRoot() catch |err| {
         std.debug.print("caught parser error, current token: {}\n", .{parser.peek()});
-        for (parser.stmts.items) |stmt| {
-            stmt.destroy(allocator);
-        }
-        parser.stmts.deinit();
         return err;
     };
 
@@ -59,7 +54,6 @@ const Parser = struct {
     current: usize,
     hadError: bool,
     endBlockTag: ?Token.Kind,
-    stmts: std.ArrayList(*Statement), // holds in-progress parse results
 
     const Self = @This();
 
@@ -257,24 +251,25 @@ const Parser = struct {
     }
 
     fn parseRoot(self: *Self) ![]*Statement {
+        var stmt_list = std.ArrayList(*Statement).init(self.allocator);
         while (!self.isEof()) {
             if (self.isKind(.text)) {
                 const stmt = try Statement.output(self.allocator, self.peek().value);
                 try self.consume();
-                try self.stmts.append(stmt);
+                try stmt_list.append(stmt);
             } else if (self.isKind(.block_open)) {
                 const stmt = try self.parseStatement();
                 if (stmt == null) break;
-                try self.stmts.append(stmt.?);
+                try stmt_list.append(stmt.?);
             } else if (self.isKind(.variable_open)) {
                 const stmt = try self.parseExpressionStatement();
-                try self.stmts.append(stmt);
+                try stmt_list.append(stmt);
             } else {
                 // this is a parse error, unexpected token kind
                 return error.ParseError;
             }
         }
-        return self.stmts.toOwnedSlice();
+        return stmt_list.toOwnedSlice();
     }
 };
 
