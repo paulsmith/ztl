@@ -25,7 +25,12 @@ pub const Expression = union(enum) {
     }
 
     fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) std.os.WriteError!void {
-        try std.fmt.format(writer, "<EXPRESSION TODO>", .{});
+        switch (self) {
+            .number => {},
+            .ident => {},
+            .string => {},
+            .bin_op => {},
+        }
     }
 
     // constructors for the variants
