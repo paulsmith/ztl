@@ -14,7 +14,9 @@ const Statement = ast.Statement;
 // Change the allocators to handles and do central memory management
 // https://floooh.github.io/2018/06/17/handles-vs-pointers.html
 
-pub fn parse(allocator: *Allocator, name: []const u8, source: []const u8) !void {
+const Error = error{ParseError} || Allocator.Error;
+
+pub fn parse(allocator: *Allocator, name: []const u8, source: []const u8) Error!void {
     var tokens = std.ArrayList(Token).init(allocator);
     defer tokens.deinit();
 
@@ -44,8 +46,6 @@ pub fn parse(allocator: *Allocator, name: []const u8, source: []const u8) !void 
     allocator.free(stmts);
 }
 
-const Error = error{ParseError} || Allocator.Error;
-
 const Parser = struct {
     name: []const u8,
     allocator: *Allocator,
@@ -66,7 +66,7 @@ const Parser = struct {
     }
 
     fn consume(self: *Self) !void {
-        self.peek().dump();
+        //self.peek().dump();
         self.current += 1;
     }
 
@@ -102,7 +102,7 @@ const Parser = struct {
         return Statement.block(self.allocator, id, body);
     }
 
-    fn parseExtends(self: *Self) !*Statement {
+    fn parseExtends(self: *Self) Error!*Statement {
         try self.expect(.keyword_extends);
         // TODO can parse an identifier instead
         try self.expect(.string);
@@ -217,7 +217,7 @@ const Parser = struct {
         return result;
     }
 
-    fn parseStatement(self: *Self) !?*Statement {
+    fn parseStatement(self: *Self) Error!?*Statement {
         try self.expect(.block_open);
         const token = self.peek();
         if (self.endBlockTag == token.kind) {
@@ -239,14 +239,14 @@ const Parser = struct {
         return true;
     }
 
-    fn parseExpressionStatement(self: *Self) !*Statement {
+    fn parseExpressionStatement(self: *Self) Error!*Statement {
         try self.expect(.variable_open);
         const expr = try self.parseExpression(@enumToInt(Precedence.lowest));
         try self.expect(.variable_close);
         return try Statement.expression(self.allocator, expr);
     }
 
-    fn parseRoot(self: *Self) ![]*Statement {
+    fn parseRoot(self: *Self) Error![]*Statement {
         var stmt_list = std.ArrayList(*Statement).init(self.allocator);
         while (!self.isEof()) {
             if (self.isKind(.text)) {

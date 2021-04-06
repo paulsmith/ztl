@@ -24,6 +24,10 @@ pub const Expression = union(enum) {
         allocator.destroy(self);
     }
 
+    fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) std.os.WriteError!void {
+        try std.fmt.format(writer, "<EXPRESSION TODO>", .{});
+    }
+
     // constructors for the variants
 
     pub fn number(allocator: *Allocator, n: []const u8) !*Self {
@@ -95,6 +99,54 @@ pub const Statement = union(enum) {
             else => {},
         }
         allocator.destroy(self);
+    }
+
+    pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) std.os.WriteError!void {
+        switch (self) {
+            .output => {
+                var snippet: [20]u8 = undefined;
+                const len = std.math.min(self.output.text.len, 10);
+                const dots = if (len < self.output.text.len) "..." else "";
+                _ = std.mem.replace(u8, self.output.text[0..len], "\n", "\\n", snippet[0..]);
+                try std.fmt.format(writer, "Output[\"{}{}\"]", .{ snippet, dots });
+            },
+            .block => {
+                try std.fmt.format(writer, "Block[", .{});
+                for (self.block.body) |stmt, i| {
+                    try stmt.format(fmt, options, writer);
+                    if (i < self.block.body.len - 1) try std.fmt.format(writer, ", ", .{});
+                }
+                try std.fmt.format(writer, "]", .{});
+            },
+            .extends => {
+                try std.fmt.format(writer, "Extends[\"{}\"]", .{self.extends.filename});
+            },
+            .@"for" => {
+                try std.fmt.format(writer, "For[collection=", .{});
+                try self.@"for".collection.format(fmt, options, writer);
+                try std.fmt.format(writer, " ", .{});
+                for (self.@"for".body) |stmt, i| {
+                    try stmt.format(fmt, options, writer);
+                    if (i < self.@"for".body.len - 1) try std.fmt.format(writer, ", ", .{});
+                }
+                try std.fmt.format(writer, "]", .{});
+            },
+            .@"if" => {
+                try std.fmt.format(writer, "If[predicate=", .{});
+                try self.@"if".predicate.format(fmt, options, writer);
+                try std.fmt.format(writer, " ", .{});
+                for (self.@"if".consequent) |stmt, i| {
+                    try stmt.format(fmt, options, writer);
+                    if (i < self.@"if".consequent.len - 1) try std.fmt.format(writer, ", ", .{});
+                }
+                try std.fmt.format(writer, "]", .{});
+            },
+            .expr => {
+                try std.fmt.format(writer, "Expr[", .{});
+                try self.expr.format(fmt, options, writer);
+                try std.fmt.format(writer, "]", .{});
+            },
+        }
     }
 
     // constructors for the variants
