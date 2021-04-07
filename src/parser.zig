@@ -1,7 +1,5 @@
 // TODO:
-// - [ ] go back to 'statement' and 'expression' for tags .... ??
 // - [ ] write a grammar for the template language
-// - [ ] implement a toString() method for Statement
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const lexer = @import("./lexer.zig");
