@@ -2,9 +2,9 @@
 // - [ ] write a grammar for the template language
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const lexer = @import("./lexer.zig");
-const Lexer = lexer.Lexer;
-const Token = lexer.Token;
+const lex = @import("./lex.zig");
+const Lexer = lex.Lexer;
+const Token = lex.Token;
 const ast = @import("./ast.zig");
 const Expression = ast.Expression;
 const Statement = ast.Statement;
@@ -19,12 +19,12 @@ pub fn parse(allocator: *Allocator, name: []const u8, source: []const u8) !Tree 
     var tokens = std.ArrayList(Token).init(allocator);
     defer tokens.deinit();
 
-    var lex = Lexer.init(name, source);
-    var it = lex.iterator();
+    var lexer = Lexer.init(name, source);
+    var it = lexer.iterator();
     while (it.next()) |token| try tokens.append(token);
 
     var parser = Parser{
-        .name = lex.name,
+        .name = lexer.name,
         .allocator = allocator,
         .source = source,
         .tokens = tokens.items,
