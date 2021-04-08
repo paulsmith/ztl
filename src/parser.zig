@@ -208,8 +208,8 @@ const Parser = struct {
     });
 
     fn parseExpression(self: *Self, min_prec: u8) Error!*Expression {
-        var result = try self.parseAtom();
-        errdefer result.destroy(self.allocator);
+        var lhs = try self.parseAtom();
+        errdefer lhs.destroy(self.allocator);
         while (isBinOp(self.peek().value)) {
             const op = self.peek().value;
             const op_info = getOpInfo(op);
@@ -219,9 +219,9 @@ const Parser = struct {
             var next_prec = prec;
             if (op_info.assoc == .left) next_prec += 1;
             const rhs = try self.parseExpression(next_prec);
-            result = try Expression.binOp(self.allocator, op, result, rhs);
+            lhs = try Expression.binOp(self.allocator, op, lhs, rhs);
         }
-        return result;
+        return lhs;
     }
 
     fn parseStatement(self: *Self) Error!?*Statement {
