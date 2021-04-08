@@ -1,4 +1,5 @@
 // TODO:
+// - [ ] enforce {% extends %} first tag in template
 // - [ ] write a grammar for the template language
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -181,9 +182,12 @@ const Parser = struct {
         comparison, // < > <= >=
         addition, // + -
         multiplication, // * / %
+        filter, // |
+        call, // . ()
     };
 
     // FIXME map from token kind instead of strings, maybe? who cares
+    // TODO this is precedence climbing, convert to Pratt parser
     const bin_ops = std.ComptimeStringMap(OpInfo, .{
         .{ "and", .{ .assoc = .left, .prec = .@"and" } },
         .{ "or", .{ .assoc = .left, .prec = .@"or" } },
@@ -198,6 +202,9 @@ const Parser = struct {
         .{ "*", .{ .assoc = .left, .prec = .multiplication } },
         .{ "/", .{ .assoc = .left, .prec = .multiplication } },
         .{ "%", .{ .assoc = .left, .prec = .multiplication } },
+        .{ "|", .{ .assoc = .right, .prec = .filter } },
+        .{ ".", .{ .assoc = .left, .prec = .call } },
+        .{ "(", .{ .assoc = .left, .prec = .call } },
     });
 
     fn parseExpression(self: *Self, min_prec: u8) Error!*Expression {
@@ -295,4 +302,5 @@ test "simple parse" {
         \\{% endfor %}
     );
     try testParse("{% if 2 + 5 < 8 and 6 * 7 > 41 %}ok{% endif %}");
+    try testParse("{{ foo.quux.fnord | bar | baz }}");
 }
