@@ -31,20 +31,6 @@ pub const Expression = union(enum) {
         allocator.destroy(self);
     }
 
-    pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) @TypeOf(writer).Error!void {
-        switch (self) {
-            .number => {
-                try writer.writeAll("number=");
-                try writer.writeAll(self.number);
-            },
-            .name => {
-                try writer.writeAll("name=");
-                try writer.writeAll(self.name);
-            },
-            else => unreachable,
-        }
-    }
-
     // constructors for the variants
 
     pub fn number(allocator: *Allocator, n: []const u8) !*Self {
@@ -75,6 +61,41 @@ pub const Expression = union(enum) {
         const expr = try allocator.create(Self);
         expr.* = .{ .bin_op = .{ .op = op, .lhs = lhs, .rhs = rhs } };
         return expr;
+    }
+};
+
+const ExpressionFormatter = struct {
+    expr: *Expression,
+
+    const Self = @This();
+
+    // NOTE(paulsmith): see comment above .format() on the StatementFormatter below.
+    pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) @TypeOf(writer).Error!void {
+        var buf: [1024]u8 = undefined;
+        var allocator = &std.heap.FixedBufferAllocator.init(buf[0..]).allocator;
+
+        const Item = struct {
+            expr: *const Expression,
+            append_sep: bool,
+        };
+
+        var empty = std.ArrayList(Item).init(allocator);
+        var rest = std.ArrayList(Item).init(allocator);
+
+        empty.append(.{ .expr = &self.expr, .append_sep = false }) catch @panic("couldn't append to the empty stack");
+
+        while (empty.popOrNull()) |item| {
+            rest.append(item) catch @panic("couldn't append to the rest stack");
+
+            switch (item.expr.*) {
+                .bin_op => |bin_op| {
+                    try writer.writeAll("(");
+                    try writer.writeAll(bin_op.op);
+                    empty.append(.{bin_op.lhs});
+                },
+                else => unreachable,
+            }
+        }
     }
 };
 
@@ -167,7 +188,7 @@ pub const Statement = union(enum) {
     }
 };
 
-// NOTE(paulsmith): this is a workaround due to a Zig compiler bug that causes an infinite loop in the Semantic Analysis step when there is a recursive call in the format() function, adhering to the interface described in the std.fmt.format comment. We wrap the AST object in a formatter type (retrieved with a call to .formatter()) that builds a string representation of the object iteratively, side-stepping the recursive issue. Once this compiler bug [GitHub issue TKTK] is fixed, the format() function can be implemented directly on the AST type and can use the recursive implementation.
+// NOTE(paulsmith): this is a workaround due to a Zig compiler bug that causes an infinite loop in the Semantic Analysis step when there is a recursive call in the format() function, adhering to the interface described in the std.fmt.format comment. We wrap the AST object in a formatter type (retrieved with a call to .formatter()) that builds a string representation of the object iteratively, side-stepping the recursive issue. Once this compiler bug [https://github.com/ziglang/zig/issues/4572] is fixed, the format() function can be implemented directly on the AST type and can use the recursive implementation.
 const StatementFormatter = struct {
     stmt: Statement,
 
@@ -210,14 +231,22 @@ const StatementFormatter = struct {
                         empty.append(.{ .stmt = stmt, .append_sep = append_sep }) catch @panic("couldn't append to the empty stack");
                     }
                 },
+                .@"if" => |@"if"| {
+                    try writer.writeAll("If[predicate=");
+                    try std.fmt.format(writer, "{}", .{@"if".predicate});
+                    try writer.writeAll(" consequent=[");
+                    for (@"if".consequent) |stmt, i| {
+                        const append_sep = i < @"if".consequent.len - 1;
+                        empty.append(.{ .stmt = stmt, .append_sep = append_sep }) catch @panic("couldn't append to the empty stack");
+                    }
+                },
                 else => {},
             }
         }
 
         while (rest.popOrNull()) |item| {
             switch (item.stmt.*) {
-                .block, .@"for" => try writer.writeAll("]]"),
-                .@"if" => try writer.writeAll("]"),
+                .block, .@"for", .@"if" => try writer.writeAll("]]"),
                 .output => |output| {
                     const max_len = 10;
                     var snippet: [2 * max_len]u8 = undefined;

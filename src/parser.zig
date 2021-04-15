@@ -207,6 +207,8 @@ const Parser = struct {
         .{ .kind = .minus, .bp = .prefix_op, .parse_fn = parseNullPrefixOp },
         .{ .kind = .plus, .bp = .prefix_op, .parse_fn = parseNullPrefixOp },
         .{ .kind = .not, .bp = .prefix_op, .parse_fn = parseNullPrefixOp },
+        .{ .kind = .number, .bp = .@"null", .parse_fn = parseLeafExpr },
+        .{ .kind = .string, .bp = .@"null", .parse_fn = parseLeafExpr },
         .{ .kind = .identifier, .bp = .@"null", .parse_fn = parseLeafExpr },
     };
 
@@ -215,6 +217,10 @@ const Parser = struct {
         .{ .kind = .minus, .rbp = .addition, .parse_fn = parseLeftBinOp },
         .{ .kind = .star, .rbp = .multiplication, .parse_fn = parseLeftBinOp },
         .{ .kind = .forward_slash, .rbp = .multiplication, .parse_fn = parseLeftBinOp },
+        .{ .kind = .less_than, .rbp = .comparison, .parse_fn = parseLeftBinOp },
+        .{ .kind = .greater_than, .rbp = .comparison, .parse_fn = parseLeftBinOp },
+        .{ .kind = .keyword_and, .rbp = .@"and", .parse_fn = parseLeftBinOp },
+        .{ .kind = .keyword_or, .rbp = .@"or", .parse_fn = parseLeftBinOp },
     };
 
     fn parseLeafExpr(parser: *Parser, token: Token, bp: u8) Error!*Expression {
@@ -398,10 +404,10 @@ test "simple parse" {
         \\Output[text="<ul>\n"]
         \\For[element=name collection=name=name_list body=[Output[text="\n  <li>"], Expr[name=name], Output[text="</li>\n"]]]
     );
+    try testParse("{% if 2 + 5 < 8 and 6 * 7 > 41 %}ok{% endif %}",
+        \\If[predicate=() consequent=[]]
+    );
     if (false) {
-        try testParse("{% if 2 + 5 < 8 and 6 * 7 > 41 %}ok{% endif %}",
-            \\If[predicate=() consequent=[]]
-        );
         try testParse("{{ foo.quux.fnord | bar | baz }}");
     }
 }
