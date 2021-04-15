@@ -117,7 +117,7 @@ const Parser = struct {
         try self.expect(.identifier); // TODO support parsing key,val from a map
         const element = self.previous().value;
         try self.expect(.keyword_in);
-        const collection = try self.parseExpression(@enumToInt(Precedence.lowest));
+        const collection = try self.parseExpression(@enumToInt(BindingPower.lowest));
         try self.expect(.block_close);
         self.endBlockTag = .keyword_endfor;
         const body = try self.parseRoot();
@@ -127,7 +127,7 @@ const Parser = struct {
 
     fn parseIf(self: *Self) Error!*Statement {
         try self.expect(.keyword_if);
-        const pred = try self.parseExpression(@enumToInt(Precedence.lowest));
+        const pred = try self.parseExpression(@enumToInt(BindingPower.lowest));
         try self.expect(.block_close);
         self.endBlockTag = .keyword_endif;
         const body = try self.parseRoot();
@@ -138,7 +138,7 @@ const Parser = struct {
     fn parseAtom(self: *Self) Error!*Expression {
         if (self.isKind(.open_paren)) {
             try self.consume();
-            const expr = try self.parseExpression(@enumToInt(Precedence.lowest));
+            const expr = try self.parseExpression(@enumToInt(BindingPower.lowest));
             try self.expect(.close_paren);
             return expr;
         } else if (self.isKind(.number)) {
@@ -170,44 +170,111 @@ const Parser = struct {
         assoc: enum {
             left,
             right,
-        }, prec: Precedence
+        }, prec: BindingPower
     };
 
-    const Precedence = enum(u8) {
-        lowest,
-        assignment, // =
-        @"or", // or
-        @"and", // and
-        equality, // == !=
-        comparison, // < > <= >=
-        addition, // + -
-        multiplication, // * / %
-        filter, // |
-        call, // . ()
+    const BindingPower = enum(u8) {
+        @"null",
+        lowest = 1,
+        assignment = 10, // =
+        @"or" = 20, // or
+        @"and" = 30, // and
+        equality = 40, // == !=
+        comparison = 50, // < > <= >=
+        addition = 60, // + -
+        multiplication = 70, // * / %
+        filter = 80, // |
+        prefix_op = 90, // - + !
+        call = 100, // . ()
     };
 
-    // FIXME map from token kind instead of strings, maybe? who cares
-    // TODO this is precedence climbing, convert to Pratt parser
-    const bin_ops = std.ComptimeStringMap(OpInfo, .{
-        .{ "and", .{ .assoc = .left, .prec = .@"and" } },
-        .{ "or", .{ .assoc = .left, .prec = .@"or" } },
-        .{ "==", .{ .assoc = .left, .prec = .equality } },
-        .{ "!=", .{ .assoc = .left, .prec = .equality } },
-        .{ "<", .{ .assoc = .left, .prec = .comparison } },
-        .{ ">", .{ .assoc = .left, .prec = .comparison } },
-        .{ "<=", .{ .assoc = .left, .prec = .comparison } },
-        .{ ">=", .{ .assoc = .left, .prec = .comparison } },
-        .{ "+", .{ .assoc = .left, .prec = .addition } },
-        .{ "-", .{ .assoc = .left, .prec = .addition } },
-        .{ "*", .{ .assoc = .left, .prec = .multiplication } },
-        .{ "/", .{ .assoc = .left, .prec = .multiplication } },
-        .{ "%", .{ .assoc = .left, .prec = .multiplication } },
-        .{ "|", .{ .assoc = .right, .prec = .filter } },
-        .{ ".", .{ .assoc = .left, .prec = .call } },
-        .{ "(", .{ .assoc = .left, .prec = .call } },
-    });
+    const NullExprParseFn = fn (parser: *Parser, token: Token, bp: u8) Error!*Expression;
+    const LeftExprParseFn = fn (parser: *Parser, token: Token, lhs: *Expression, rbp: u8) Error!*Expression;
 
-    fn parseExpression(self: *Self, min_prec: u8) Error!*Expression {
+    const NullDenotationRule = struct {
+        kind: Token.Kind,
+        bp: BindingPower,
+        parse_fn: NullExprParseFn,
+    };
+
+    const LeftDenotationRule = struct {
+        kind: Token.Kind,
+        rbp: BindingPower,
+        parse_fn: LeftExprParseFn,
+    };
+
+    const null_denotation_rules = [_]NullDenotationRule{
+        .{ .kind = .minus, .bp = .prefix_op, .parse_fn = parseNullPrefixOp },
+        .{ .kind = .plus, .bp = .prefix_op, .parse_fn = parseNullPrefixOp },
+        .{ .kind = .not, .bp = .prefix_op, .parse_fn = parseNullPrefixOp },
+        .{ .kind = .identifier, .bp = .@"null", .parse_fn = parseLeafExpr },
+    };
+
+    const left_denotation_rules = [_]LeftDenotationRule{
+        .{ .kind = .plus, .rbp = .addition, .parse_fn = parseLeftBinOp },
+        .{ .kind = .minus, .rbp = .addition, .parse_fn = parseLeftBinOp },
+        .{ .kind = .star, .rbp = .multiplication, .parse_fn = parseLeftBinOp },
+        .{ .kind = .forward_slash, .rbp = .multiplication, .parse_fn = parseLeftBinOp },
+    };
+
+    fn parseLeafExpr(parser: *Parser, token: Token, bp: u8) Error!*Expression {
+        switch (token.kind) {
+            .number => return try Expression.number(parser.allocator, token.value),
+            .string => return try Expression.string(parser.allocator, token.value),
+            .identifier => return try Expression.name(parser.allocator, token.value),
+            else => return error.ParseError,
+        }
+    }
+
+    fn parseNullPrefixOp(parser: *Parser, token: Token, bp: u8) Error!*Expression {
+        const expr = try parser.parseExpression(bp);
+        return Expression.unaryOp(parser.allocator, token.value, expr); // FIXME copy token string value
+    }
+
+    fn parseLeftBinOp(parser: *Parser, token: Token, lhs: *Expression, bp: u8) Error!*Expression {
+        const rhs = try parser.parseExpression(bp);
+        return Expression.binOp(parser.allocator, token.value, lhs, rhs);
+    }
+
+    fn lookupNull(self: *Self) ?NullDenotationRule {
+        const token = self.peek();
+        for (null_denotation_rules) |rule| if (rule.kind == token.kind) return rule;
+        return null;
+    }
+
+    fn parsePrefix(self: *Self) Error!*Expression {
+        const rule = self.lookupNull() orelse return error.ParseError;
+        const token = self.peek();
+        try self.consume();
+        return try rule.parse_fn(self, token, @enumToInt(rule.bp));
+    }
+
+    fn lookupLeft(self: *Self) ?LeftDenotationRule {
+        const token = self.peek();
+        for (left_denotation_rules) |rule| if (rule.kind == token.kind) return rule;
+        return null;
+    }
+
+    fn rbp(self: *Self) Error!u8 {
+        const rule = self.lookupLeft();
+        const bp = if (rule != null) rule.?.rbp else BindingPower.@"null";
+        return @enumToInt(bp);
+    }
+
+    fn parseInfix(self: *Self, lhs: *Expression) Error!*Expression {
+        const rule = self.lookupLeft() orelse return error.ParseError;
+        const token = self.peek();
+        try self.consume();
+        return try rule.parse_fn(self, token, lhs, @enumToInt(rule.rbp));
+    }
+
+    fn parseExpression(self: *Self, bp: u8) Error!*Expression {
+        var lhs = try self.parsePrefix();
+        while ((try self.rbp()) > bp) lhs = try self.parseInfix(lhs);
+        return lhs;
+    }
+
+    fn parseExpressionOld(self: *Self, min_prec: u8) Error!*Expression {
         var lhs = try self.parseAtom();
         errdefer lhs.destroy(self.allocator);
         while (isBinOp(self.peek().value)) {
@@ -248,7 +315,7 @@ const Parser = struct {
 
     fn parseExpressionStatement(self: *Self) Error!*Statement {
         try self.expect(.variable_open);
-        const expr = try self.parseExpression(@enumToInt(Precedence.lowest));
+        const expr = try self.parseExpression(@enumToInt(BindingPower.lowest));
         try self.expect(.variable_close);
         return try Statement.expression(self.allocator, expr);
     }
@@ -276,31 +343,65 @@ const Parser = struct {
     }
 };
 
-fn testParse(source: []const u8) !void {
+fn testParseDumpTree(source: []const u8) !void {
     var tree = try parse(std.testing.allocator, "", source);
-    for (tree.stmts) |stmt| std.debug.print("{}\n", .{stmt});
+    for (tree.stmts) |stmt| std.debug.print("{} ", .{stmt});
+    std.debug.print("\n", .{});
     tree.destroy();
 }
 
+fn testParse(source: []const u8, want: []const u8) !void {
+    var buf = std.ArrayList(u8).init(std.testing.allocator);
+    defer buf.deinit();
+    var writer = buf.writer();
+    //var writer = std.io.getStdErr().writer();
+    var tree = parse(std.testing.allocator, "", source) catch @panic("couldn't parse");
+    defer tree.destroy();
+    for (tree.stmts) |stmt, i| {
+        std.fmt.format(writer, "{}", .{stmt.formatter()}) catch @panic("couldn't format");
+        if (i < tree.stmts.len - 1) std.fmt.format(writer, "\n", .{}) catch @panic("couldn't format");
+    }
+    std.testing.expectEqualStrings(want, buf.items);
+}
+
 test "simple parse" {
-    try testParse("hello {{ name }}!");
-    try testParse("{% block title %}Greetings{% endblock %}");
+    try testParse("please say hello to {{ name }}!",
+        \\Output[text="please say..."]
+        \\Expr[name=name]
+        \\Output[text="!"]
+    );
+    try testParse("{% block title %}Greetings{% endblock %}",
+        \\Block[name=title body=[Output[text="Greetings"]]]
+    );
+    try testParse(
+        \\{% extends "base.html" %}
+    ,
+        \\Extends[filename="base.html"]
+    );
     try testParse(
         \\{% block title %}Greetings{% endblock %}
         \\
         \\{% block body %}
         \\  Hello, {{ name }}!
         \\{% endblock %}
-    );
-    try testParse(
-        \\{% extends "base.html" %}
+    ,
+        \\Block[name=title body=[Output[text="Greetings"]]]
+        \\Output[text="\n\n"]
+        \\Block[name=body body=[Output[text="\n  Hello, "], Expr[name=name], Output[text="!\n"]]]
     );
     try testParse(
         \\<ul>
         \\{% for name in name_list %}
         \\  <li>{{ name }}</li>
         \\{% endfor %}
+    ,
+        \\Output[text="<ul>\n"]
+        \\For[element=name collection=name=name_list body=[Output[text="\n  <li>"], Expr[name=name], Output[text="</li>\n"]]]
     );
-    try testParse("{% if 2 + 5 < 8 and 6 * 7 > 41 %}ok{% endif %}");
-    try testParse("{{ foo.quux.fnord | bar | baz }}");
+    if (false) {
+        try testParse("{% if 2 + 5 < 8 and 6 * 7 > 41 %}ok{% endif %}",
+            \\If[predicate=() consequent=[]]
+        );
+        try testParse("{{ foo.quux.fnord | bar | baz }}");
+    }
 }

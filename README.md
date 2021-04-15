@@ -1,5 +1,11 @@
 Templates for Zig based on Python's Jinja and Django.
 
+possible names:
+ * ZTL
+ * zational
+ * zestful
+ * glitz!!!
+
 Example template
 
 <ul>

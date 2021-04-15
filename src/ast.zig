@@ -5,6 +5,10 @@ pub const Expression = union(enum) {
     number: []const u8,
     name: []const u8,
     string: []const u8,
+    unary_op: struct {
+        op: []const u8,
+        expr: *Expression,
+    },
     bin_op: struct {
         op: []const u8,
         lhs: *Expression,
@@ -15,6 +19,9 @@ pub const Expression = union(enum) {
 
     pub fn destroy(self: *Self, allocator: *Allocator) void {
         switch (self.*) {
+            .unary_op => |val| {
+                val.expr.destroy(allocator);
+            },
             .bin_op => |val| {
                 val.lhs.destroy(allocator);
                 val.rhs.destroy(allocator);
@@ -24,24 +31,17 @@ pub const Expression = union(enum) {
         allocator.destroy(self);
     }
 
-    fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) std.os.WriteError!void {
+    pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) @TypeOf(writer).Error!void {
         switch (self) {
             .number => {
-                try std.fmt.format(writer, "number={}", .{self.number});
+                try writer.writeAll("number=");
+                try writer.writeAll(self.number);
             },
             .name => {
-                try std.fmt.format(writer, "name={}", .{self.name});
+                try writer.writeAll("name=");
+                try writer.writeAll(self.name);
             },
-            .string => {
-                try std.fmt.format(writer, "string=\"{}\"", .{self.string});
-            },
-            .bin_op => {
-                try std.fmt.format(writer, "(", .{});
-                try self.bin_op.lhs.format(fmt, options, writer);
-                try std.fmt.format(writer, " {} ", .{self.bin_op.op});
-                try self.bin_op.rhs.format(fmt, options, writer);
-                try std.fmt.format(writer, ")", .{});
-            },
+            else => unreachable,
         }
     }
 
@@ -62,6 +62,12 @@ pub const Expression = union(enum) {
     pub fn string(allocator: *Allocator, str: []const u8) !*Self {
         const expr = try allocator.create(Self);
         expr.* = .{ .string = str };
+        return expr;
+    }
+
+    pub fn unaryOp(allocator: *Allocator, op: []const u8, sub_expr: *Expression) !*Self {
+        const expr = try allocator.create(Self);
+        expr.* = .{ .unary_op = .{ .op = op, .expr = sub_expr } };
         return expr;
     }
 
@@ -118,54 +124,6 @@ pub const Statement = union(enum) {
         allocator.destroy(self);
     }
 
-    pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) std.os.WriteError!void {
-        switch (self) {
-            .output => {
-                var snippet: [20]u8 = undefined;
-                const len = std.math.min(self.output.text.len, 10);
-                const dots = if (len < self.output.text.len) "..." else "";
-                _ = std.mem.replace(u8, self.output.text[0..len], "\n", "\\n", snippet[0..]);
-                try std.fmt.format(writer, "Output[text=\"{}{}\"]", .{ snippet, dots });
-            },
-            .block => {
-                try std.fmt.format(writer, "Block[name={} ", .{self.block.name});
-                for (self.block.body) |stmt, i| {
-                    try stmt.format(fmt, options, writer);
-                    if (i < self.block.body.len - 1) try std.fmt.format(writer, ", ", .{});
-                }
-                try std.fmt.format(writer, "]", .{});
-            },
-            .extends => {
-                try std.fmt.format(writer, "Extends[filename=\"{}\"]", .{self.extends.filename});
-            },
-            .@"for" => {
-                try std.fmt.format(writer, "For[collection=", .{});
-                try self.@"for".collection.format(fmt, options, writer);
-                try std.fmt.format(writer, " body=[", .{});
-                for (self.@"for".body) |stmt, i| {
-                    try stmt.format(fmt, options, writer);
-                    if (i < self.@"for".body.len - 1) try std.fmt.format(writer, ", ", .{});
-                }
-                try std.fmt.format(writer, "]]", .{});
-            },
-            .@"if" => {
-                try std.fmt.format(writer, "If[predicate=", .{});
-                try self.@"if".predicate.format(fmt, options, writer);
-                try std.fmt.format(writer, " consequent=[", .{});
-                for (self.@"if".consequent) |stmt, i| {
-                    try stmt.format(fmt, options, writer);
-                    if (i < self.@"if".consequent.len - 1) try std.fmt.format(writer, ", ", .{});
-                }
-                try std.fmt.format(writer, "]]", .{});
-            },
-            .expr => {
-                try std.fmt.format(writer, "Expr[", .{});
-                try self.expr.format(fmt, options, writer);
-                try std.fmt.format(writer, "]", .{});
-            },
-        }
-    }
-
     // constructors for the variants
 
     pub fn output(allocator: *Allocator, text: []const u8) !*Self {
@@ -202,6 +160,88 @@ pub const Statement = union(enum) {
         const stmt = try allocator.create(Self);
         stmt.* = .{ .expr = expr };
         return stmt;
+    }
+
+    pub fn formatter(self: Self) StatementFormatter {
+        return StatementFormatter{ .stmt = self };
+    }
+};
+
+// NOTE(paulsmith): this is a workaround due to a Zig compiler bug that causes an infinite loop in the Semantic Analysis step when there is a recursive call in the format() function, adhering to the interface described in the std.fmt.format comment. We wrap the AST object in a formatter type (retrieved with a call to .formatter()) that builds a string representation of the object iteratively, side-stepping the recursive issue. Once this compiler bug [GitHub issue TKTK] is fixed, the format() function can be implemented directly on the AST type and can use the recursive implementation.
+const StatementFormatter = struct {
+    stmt: Statement,
+
+    const Self = @This();
+
+    pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) @TypeOf(writer).Error!void {
+        var buf: [1024]u8 = undefined; // NOTE(paulsmith): hopefully this is enough space for a large AST but not so large that it blows the stack. Might have to take an allocator from the caller if that becomes a problem, changing the API.
+        var allocator = &std.heap.FixedBufferAllocator.init(buf[0..]).allocator;
+
+        const Item = struct {
+            stmt: *const Statement,
+            append_sep: bool,
+        };
+
+        var empty = std.ArrayList(Item).init(allocator);
+        var rest = std.ArrayList(Item).init(allocator);
+
+        empty.append(.{ .stmt = &self.stmt, .append_sep = false }) catch @panic("couldn't append to the empty stack");
+
+        while (empty.popOrNull()) |item| {
+            rest.append(item) catch @panic("couldn't append to the rest stack");
+            switch (item.stmt.*) {
+                .block => |block| {
+                    try writer.writeAll("Block[name=");
+                    try writer.writeAll(block.name);
+                    try writer.writeAll(" body=[");
+                    for (block.body) |stmt, i| {
+                        const append_sep = i < block.body.len - 1;
+                        empty.append(.{ .stmt = stmt, .append_sep = append_sep }) catch @panic("couldn't append to the empty stack");
+                    }
+                },
+                .@"for" => |@"for"| {
+                    try writer.writeAll("For[element=");
+                    try writer.writeAll(@"for".element);
+                    try writer.writeAll(" collection=");
+                    try std.fmt.format(writer, "{}", .{@"for".collection});
+                    try writer.writeAll(" body=[");
+                    for (@"for".body) |stmt, i| {
+                        const append_sep = i < @"for".body.len - 1;
+                        empty.append(.{ .stmt = stmt, .append_sep = append_sep }) catch @panic("couldn't append to the empty stack");
+                    }
+                },
+                else => {},
+            }
+        }
+
+        while (rest.popOrNull()) |item| {
+            switch (item.stmt.*) {
+                .block, .@"for" => try writer.writeAll("]]"),
+                .@"if" => try writer.writeAll("]"),
+                .output => |output| {
+                    const max_len = 10;
+                    var snippet: [2 * max_len]u8 = undefined;
+                    const len = std.math.min(output.text.len, max_len);
+                    const dots = if (len < output.text.len) "..." else "";
+                    const replacements = std.mem.replace(u8, output.text[0..len], "\n", "\\n", snippet[0..]);
+                    try writer.writeAll("Output[text=\"");
+                    try writer.writeAll(snippet[0 .. len + replacements]);
+                    try writer.writeAll(dots);
+                    try writer.writeAll("\"]");
+                },
+                .extends => |extends| {
+                    try writer.writeAll("Extends[filename=\"");
+                    try writer.writeAll(extends.filename);
+                    try writer.writeAll("\"]");
+                },
+                .expr => |expr| {
+                    try writer.writeAll("Expr[");
+                    try std.fmt.format(writer, "{}", .{expr});
+                    try writer.writeAll("]");
+                },
+            }
+            if (item.append_sep) try writer.writeAll(", ");
+        }
     }
 };
 

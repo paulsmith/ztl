@@ -19,30 +19,30 @@ pub const Token = struct {
         variable_close,
         comment_open,
         comment_close,
-        identifier,
-        string,
-        number,
-        open_paren,
-        close_paren,
-        dot,
-        pipe,
-        open_bracket,
-        close_bracket,
-        comma,
-        tilde,
-        assign,
-        minus,
-        plus,
-        star,
-        forward_slash,
-        percent,
-        less_than,
-        greater_than,
-        equal_to,
-        gt_or_equal_to,
-        lt_or_equal_to,
-        not,
-        not_equal,
+        identifier, // names
+        string, // string literal
+        number, // number literal
+        open_paren, // (
+        close_paren, // )
+        dot, // .
+        pipe, // |
+        open_bracket, // [
+        close_bracket, // ]
+        comma, // ,
+        tilde, // ~
+        assign, // =
+        minus, // -
+        plus, // +
+        star, // *
+        forward_slash, // /
+        percent, // %
+        less_than, // <
+        greater_than, // >
+        equal_to, // ==
+        gt_or_equal_to, // >=
+        lt_or_equal_to, // <=
+        not, // !
+        not_equal, // !=
         keyword_block,
         keyword_endblock,
         keyword_extends,
