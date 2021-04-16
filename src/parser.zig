@@ -135,44 +135,6 @@ const Parser = struct {
         return try Statement.@"if"(self.allocator, pred, body);
     }
 
-    fn parseAtom(self: *Self) Error!*Expression {
-        if (self.isKind(.open_paren)) {
-            try self.consume();
-            const expr = try self.parseExpression(@enumToInt(BindingPower.lowest));
-            try self.expect(.close_paren);
-            return expr;
-        } else if (self.isKind(.number)) {
-            const expr = try Expression.number(self.allocator, self.peek().value);
-            try self.consume();
-            return expr;
-        } else if (self.isKind(.identifier)) {
-            const expr = try Expression.name(self.allocator, self.peek().value);
-            try self.consume();
-            return expr;
-        } else if (self.isKind(.string)) {
-            const expr = try Expression.string(self.allocator, self.peek().value);
-            try self.consume();
-            return expr;
-        } else {
-            return error.ParseError; // FIXME more descriptive error
-        }
-    }
-
-    fn isBinOp(op: []const u8) bool {
-        return bin_ops.has(op);
-    }
-
-    fn getOpInfo(op: []const u8) OpInfo {
-        return bin_ops.get(op).?;
-    }
-
-    const OpInfo = struct {
-        assoc: enum {
-            left,
-            right,
-        }, prec: BindingPower
-    };
-
     const BindingPower = enum(u8) {
         @"null",
         lowest = 1,
@@ -282,23 +244,6 @@ const Parser = struct {
         return lhs;
     }
 
-    fn parseExpressionOld(self: *Self, min_prec: u8) Error!*Expression {
-        var lhs = try self.parseAtom();
-        errdefer lhs.destroy(self.allocator);
-        while (isBinOp(self.peek().value)) {
-            const op = self.peek().value;
-            const op_info = getOpInfo(op);
-            const prec = @enumToInt(op_info.prec);
-            if (prec < min_prec) break;
-            try self.consume();
-            var next_prec = prec;
-            if (op_info.assoc == .left) next_prec += 1;
-            const rhs = try self.parseExpression(next_prec);
-            lhs = try Expression.binOp(self.allocator, op, lhs, rhs);
-        }
-        return lhs;
-    }
-
     fn parseStatement(self: *Self) Error!?*Statement {
         try self.expect(.block_open);
         const token = self.peek();
@@ -362,7 +307,6 @@ fn testParse(source: []const u8, want: []const u8) !void {
     var buf = std.ArrayList(u8).init(std.testing.allocator);
     defer buf.deinit();
     var writer = buf.writer();
-    //var writer = std.io.getStdErr().writer();
     var tree = parse(std.testing.allocator, "", source) catch @panic("couldn't parse");
     defer tree.destroy();
     for (tree.stmts) |stmt, i| {
