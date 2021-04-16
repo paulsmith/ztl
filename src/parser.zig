@@ -188,12 +188,12 @@ const Parser = struct {
     };
 
     fn parseLeafExpr(parser: *Parser, token: Token, bp: u8) Error!*Expression {
-        switch (token.kind) {
-            .number => return try Expression.number(parser.allocator, token.value),
-            .string => return try Expression.string(parser.allocator, token.value),
-            .identifier => return try Expression.name(parser.allocator, token.value),
-            else => return error.ParseError,
-        }
+        return switch (token.kind) {
+            .number => try Expression.number(parser.allocator, token.value),
+            .string => try Expression.string(parser.allocator, token.value),
+            .identifier => try Expression.name(parser.allocator, token.value),
+            else => error.ParseError,
+        };
     }
 
     fn parseNullPrefixOp(parser: *Parser, token: Token, bp: u8) Error!*Expression {
