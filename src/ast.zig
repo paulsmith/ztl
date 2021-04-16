@@ -31,6 +31,10 @@ pub const Expression = union(enum) {
         allocator.destroy(self);
     }
 
+    pub fn formatter(self: Self) ExpressionFormatter {
+        return ExpressionFormatter{ .expr = self };
+    }
+
     // constructors for the variants
 
     pub fn number(allocator: *Allocator, n: []const u8) !*Self {
@@ -65,7 +69,7 @@ pub const Expression = union(enum) {
 };
 
 const ExpressionFormatter = struct {
-    expr: *Expression,
+    expr: Expression,
 
     const Self = @This();
 
@@ -88,12 +92,36 @@ const ExpressionFormatter = struct {
             rest.append(item) catch @panic("couldn't append to the rest stack");
 
             switch (item.expr.*) {
+                .unary_op => |unary_op| {
+                    try writer.writeAll("(");
+                    try writer.writeAll(unary_op.op);
+                    try writer.writeAll(" ");
+                    empty.append(.{ .expr = unary_op.expr, .append_sep = false }) catch @panic("couldn't append to the empty stack");
+                },
                 .bin_op => |bin_op| {
                     try writer.writeAll("(");
                     try writer.writeAll(bin_op.op);
-                    empty.append(.{bin_op.lhs});
+                    try writer.writeAll(" ");
+                    empty.append(.{ .expr = bin_op.lhs, .append_sep = true }) catch @panic("couldn't append to the empty stack");
+                    empty.append(.{ .expr = bin_op.rhs, .append_sep = false }) catch @panic("couldn't append to the empty stack");
                 },
-                else => unreachable,
+                else => {},
+            }
+        }
+
+        var prepend_sep = false;
+        while (rest.popOrNull()) |item| {
+            switch (item.expr.*) {
+                .name, .string, .number => |str| {
+                    if (prepend_sep) try writer.writeAll(" ");
+                    prepend_sep = false;
+                    try writer.writeAll(str);
+                    if (item.append_sep) try writer.writeAll(" ");
+                },
+                .bin_op, .unary_op => {
+                    try writer.writeAll(")");
+                    prepend_sep = true;
+                },
             }
         }
     }
@@ -145,6 +173,10 @@ pub const Statement = union(enum) {
         allocator.destroy(self);
     }
 
+    pub fn formatter(self: Self) StatementFormatter {
+        return StatementFormatter{ .stmt = self };
+    }
+
     // constructors for the variants
 
     pub fn output(allocator: *Allocator, text: []const u8) !*Self {
@@ -182,10 +214,6 @@ pub const Statement = union(enum) {
         stmt.* = .{ .expr = expr };
         return stmt;
     }
-
-    pub fn formatter(self: Self) StatementFormatter {
-        return StatementFormatter{ .stmt = self };
-    }
 };
 
 // NOTE(paulsmith): this is a workaround due to a Zig compiler bug that causes an infinite loop in the Semantic Analysis step when there is a recursive call in the format() function, adhering to the interface described in the std.fmt.format comment. We wrap the AST object in a formatter type (retrieved with a call to .formatter()) that builds a string representation of the object iteratively, side-stepping the recursive issue. Once this compiler bug [https://github.com/ziglang/zig/issues/4572] is fixed, the format() function can be implemented directly on the AST type and can use the recursive implementation.
@@ -212,29 +240,29 @@ const StatementFormatter = struct {
             rest.append(item) catch @panic("couldn't append to the rest stack");
             switch (item.stmt.*) {
                 .block => |block| {
-                    try writer.writeAll("Block[name=");
+                    try writer.writeAll("(Block (name ");
                     try writer.writeAll(block.name);
-                    try writer.writeAll(" body=[");
+                    try writer.writeAll(") (body ");
                     for (block.body) |stmt, i| {
                         const append_sep = i < block.body.len - 1;
                         empty.append(.{ .stmt = stmt, .append_sep = append_sep }) catch @panic("couldn't append to the empty stack");
                     }
                 },
                 .@"for" => |@"for"| {
-                    try writer.writeAll("For[element=");
+                    try writer.writeAll("(For (element ");
                     try writer.writeAll(@"for".element);
-                    try writer.writeAll(" collection=");
-                    try std.fmt.format(writer, "{}", .{@"for".collection});
-                    try writer.writeAll(" body=[");
+                    try writer.writeAll(") (collection ");
+                    try std.fmt.format(writer, "{}", .{@"for".collection.formatter()});
+                    try writer.writeAll(") (body ");
                     for (@"for".body) |stmt, i| {
                         const append_sep = i < @"for".body.len - 1;
                         empty.append(.{ .stmt = stmt, .append_sep = append_sep }) catch @panic("couldn't append to the empty stack");
                     }
                 },
                 .@"if" => |@"if"| {
-                    try writer.writeAll("If[predicate=");
-                    try std.fmt.format(writer, "{}", .{@"if".predicate});
-                    try writer.writeAll(" consequent=[");
+                    try writer.writeAll("(If (predicate ");
+                    try std.fmt.format(writer, "{}", .{@"if".predicate.formatter()});
+                    try writer.writeAll(") (consequent ");
                     for (@"if".consequent) |stmt, i| {
                         const append_sep = i < @"if".consequent.len - 1;
                         empty.append(.{ .stmt = stmt, .append_sep = append_sep }) catch @panic("couldn't append to the empty stack");
@@ -246,30 +274,30 @@ const StatementFormatter = struct {
 
         while (rest.popOrNull()) |item| {
             switch (item.stmt.*) {
-                .block, .@"for", .@"if" => try writer.writeAll("]]"),
+                .block, .@"for", .@"if" => try writer.writeAll("))"),
                 .output => |output| {
                     const max_len = 10;
                     var snippet: [2 * max_len]u8 = undefined;
                     const len = std.math.min(output.text.len, max_len);
                     const dots = if (len < output.text.len) "..." else "";
                     const replacements = std.mem.replace(u8, output.text[0..len], "\n", "\\n", snippet[0..]);
-                    try writer.writeAll("Output[text=\"");
+                    try writer.writeAll("(Output (text \"");
                     try writer.writeAll(snippet[0 .. len + replacements]);
                     try writer.writeAll(dots);
-                    try writer.writeAll("\"]");
+                    try writer.writeAll("\"))");
                 },
                 .extends => |extends| {
-                    try writer.writeAll("Extends[filename=\"");
+                    try writer.writeAll("(Extends (filename \"");
                     try writer.writeAll(extends.filename);
-                    try writer.writeAll("\"]");
+                    try writer.writeAll("\"))");
                 },
                 .expr => |expr| {
-                    try writer.writeAll("Expr[");
-                    try std.fmt.format(writer, "{}", .{expr});
-                    try writer.writeAll("]");
+                    try writer.writeAll("(Expr ");
+                    try std.fmt.format(writer, "{}", .{expr.formatter()});
+                    try writer.writeAll(")");
                 },
             }
-            if (item.append_sep) try writer.writeAll(", ");
+            if (item.append_sep) try writer.writeAll(" ");
         }
     }
 };

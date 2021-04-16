@@ -372,17 +372,17 @@ fn testParse(source: []const u8, want: []const u8) !void {
 
 test "simple parse" {
     try testParse("please say hello to {{ name }}!",
-        \\Output[text="please say..."]
-        \\Expr[name=name]
-        \\Output[text="!"]
+        \\(Output (text "please say..."))
+        \\(Expr name)
+        \\(Output (text "!"))
     );
     try testParse("{% block title %}Greetings{% endblock %}",
-        \\Block[name=title body=[Output[text="Greetings"]]]
+        \\(Block (name title) (body (Output (text "Greetings"))))
     );
     try testParse(
         \\{% extends "base.html" %}
     ,
-        \\Extends[filename="base.html"]
+        \\(Extends (filename "base.html"))
     );
     try testParse(
         \\{% block title %}Greetings{% endblock %}
@@ -391,9 +391,9 @@ test "simple parse" {
         \\  Hello, {{ name }}!
         \\{% endblock %}
     ,
-        \\Block[name=title body=[Output[text="Greetings"]]]
-        \\Output[text="\n\n"]
-        \\Block[name=body body=[Output[text="\n  Hello, "], Expr[name=name], Output[text="!\n"]]]
+        \\(Block (name title) (body (Output (text "Greetings"))))
+        \\(Output (text "\n\n"))
+        \\(Block (name body) (body (Output (text "\n  Hello, ")) (Expr name) (Output (text "!\n"))))
     );
     try testParse(
         \\<ul>
@@ -401,11 +401,11 @@ test "simple parse" {
         \\  <li>{{ name }}</li>
         \\{% endfor %}
     ,
-        \\Output[text="<ul>\n"]
-        \\For[element=name collection=name=name_list body=[Output[text="\n  <li>"], Expr[name=name], Output[text="</li>\n"]]]
+        \\(Output (text "<ul>\n"))
+        \\(For (element name) (collection name_list) (body (Output (text "\n  <li>")) (Expr name) (Output (text "</li>\n"))))
     );
     try testParse("{% if 2 + 5 < 8 and 6 * 7 > 41 %}ok{% endif %}",
-        \\If[predicate=() consequent=[]]
+        \\(If (predicate (and (> (* (< (+ 2 5) 8) 6 7) 41))) (consequent (Output (text "ok"))))
     );
     if (false) {
         try testParse("{{ foo.quux.fnord | bar | baz }}");
