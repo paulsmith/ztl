@@ -221,6 +221,8 @@ const Parser = struct {
         .{ .kind = .greater_than, .rbp = .comparison, .parse_fn = parseLeftBinOp },
         .{ .kind = .keyword_and, .rbp = .@"and", .parse_fn = parseLeftBinOp },
         .{ .kind = .keyword_or, .rbp = .@"or", .parse_fn = parseLeftBinOp },
+        .{ .kind = .pipe, .rbp = .filter, .parse_fn = parseLeftBinOp },
+        .{ .kind = .dot, .rbp = .call, .parse_fn = parseLeftBinOp },
     };
 
     fn parseLeafExpr(parser: *Parser, token: Token, bp: u8) Error!*Expression {
@@ -407,7 +409,7 @@ test "simple parse" {
     try testParse("{% if 2 + 5 < 8 and 6 * 7 > 41 %}ok{% endif %}",
         \\(If (predicate (and (> (* (< (+ 2 5) 8) 6 7) 41))) (consequent (Output (text "ok"))))
     );
-    if (false) {
-        try testParse("{{ foo.quux.fnord | bar | baz }}");
-    }
+    try testParse("{{ foo.quux.fnord | bar | baz }}",
+        \\(Expr (| (| (. (. foo quux) fnord) bar) baz))
+    );
 }
