@@ -1,5 +1,4 @@
 // TODO:
-// - [ ] enforce {% extends %} first tag in template
 // - [ ] write a grammar for the template language
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -11,7 +10,7 @@ const Expression = ast.Expression;
 const Statement = ast.Statement;
 const Tree = ast.Tree;
 
-// Change the allocators to handles and do central memory management
+// TODO Change the allocators to handles and do central memory management
 // https://floooh.github.io/2018/06/17/handles-vs-pointers.html
 
 const Error = error{ParseError} || Allocator.Error;
@@ -35,7 +34,7 @@ pub fn parse(allocator: *Allocator, name: []const u8, source: []const u8) !Tree 
     };
 
     const stmts = parser.parseRoot() catch |err| {
-        std.debug.print("caught parser error, current token: {}\n", .{parser.peek()});
+        //std.debug.print("caught parser error, current token: {}\n", .{parser.peek()});
         return err;
     };
 
@@ -104,6 +103,8 @@ const Parser = struct {
     }
 
     fn parseExtends(self: *Self) Error!*Statement {
+        // per template language, must be first statement in template if it occurs
+        if (self.current != 1) return error.ParseError;
         try self.expect(.keyword_extends);
         // TODO can parse an identifier instead
         try self.expect(.string);
@@ -275,6 +276,11 @@ const Parser = struct {
 
     fn parseRoot(self: *Self) Error![]*Statement {
         var stmt_list = std.ArrayList(*Statement).init(self.allocator);
+        errdefer {
+            // FIXME I don't love this ...
+            for (stmt_list.items) |stmt| stmt.destroy(self.allocator);
+            stmt_list.deinit();
+        }
         while (!self.isEof()) {
             if (self.isKind(.text)) {
                 const stmt = try Statement.output(self.allocator, self.peek().value);
@@ -355,5 +361,17 @@ test "simple parse" {
     );
     try testParse("{{ foo.quux.fnord | bar | baz }}",
         \\(Expr (| (| (. (. foo quux) fnord) bar) baz))
+    );
+}
+
+fn testParseError(source: []const u8) void {
+    var tree = parse(std.testing.allocator, "", source);
+    std.testing.expectError(error.ParseError, tree);
+}
+
+test "parse errors" {
+    testParseError(
+        \\extends must be very first thing if it is present
+        \\{% extends "blah" %}
     );
 }

@@ -309,9 +309,7 @@ pub const Tree = struct {
     const Self = @This();
 
     pub fn destroy(self: *Self) void {
-        for (self.stmts) |stmt| {
-            stmt.destroy(self.allocator);
-        }
+        for (self.stmts) |stmt| stmt.destroy(self.allocator);
         self.allocator.free(self.stmts);
     }
 };
