@@ -14,6 +14,10 @@ pub const Expression = union(enum) {
         lhs: *Expression,
         rhs: *Expression,
     },
+    func_call: struct {
+        func: *Expression, // this should be a name, assert statically?
+        arg_list: []*Expression,
+    },
 
     const Self = @This();
 
@@ -25,6 +29,11 @@ pub const Expression = union(enum) {
             .bin_op => |val| {
                 val.lhs.destroy(allocator);
                 val.rhs.destroy(allocator);
+            },
+            .func_call => |val| {
+                val.func.destroy(allocator);
+                for (val.arg_list) |e| e.destroy(allocator);
+                allocator.free(val.arg_list);
             },
             else => {},
         }
@@ -66,6 +75,12 @@ pub const Expression = union(enum) {
         expr.* = .{ .bin_op = .{ .op = op, .lhs = lhs, .rhs = rhs } };
         return expr;
     }
+
+    pub fn funcCall(allocator: *Allocator, func: *Expression, arg_list: []*Expression) !*Self {
+        const expr = try allocator.create(Self);
+        expr.* = .{ .func_call = .{ .func = func, .arg_list = arg_list } };
+        return expr;
+    }
 };
 
 const ExpressionFormatter = struct {
@@ -105,6 +120,14 @@ const ExpressionFormatter = struct {
                     empty.append(.{ .expr = bin_op.lhs, .append_sep = true }) catch @panic("couldn't append to the empty stack");
                     empty.append(.{ .expr = bin_op.rhs, .append_sep = false }) catch @panic("couldn't append to the empty stack");
                 },
+                .func_call => |func_call| {
+                    try writer.writeAll("(funccall ");
+                    try writer.writeAll(func_call.func.name);
+                    try writer.writeAll(" (");
+                    for (func_call.arg_list) |arg, i| {
+                        empty.append(.{ .expr = arg, .append_sep = (i < func_call.arg_list.len - 1) }) catch @panic("couldn't append to the empty stack");
+                    }
+                },
                 else => {},
             }
         }
@@ -120,6 +143,10 @@ const ExpressionFormatter = struct {
                 },
                 .bin_op, .unary_op => {
                     try writer.writeAll(")");
+                    prepend_sep = true;
+                },
+                .func_call => {
+                    try writer.writeAll("))");
                     prepend_sep = true;
                 },
             }

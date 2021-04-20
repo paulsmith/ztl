@@ -15,7 +15,11 @@ const Tree = ast.Tree;
 
 const Error = error{ParseError} || Allocator.Error;
 
-pub fn parse(allocator: *Allocator, name: []const u8, source: []const u8) !Tree {
+pub const ParserOptions = struct {
+    verbose_error: bool = true,
+};
+
+pub fn parse(allocator: *Allocator, name: []const u8, source: []const u8, options: ParserOptions) !Tree {
     var tokens = std.ArrayList(Token).init(allocator);
     defer tokens.deinit();
 
@@ -34,7 +38,7 @@ pub fn parse(allocator: *Allocator, name: []const u8, source: []const u8) !Tree 
     };
 
     const stmts = parser.parseRoot() catch |err| {
-        //std.debug.print("caught parser error, current token: {}\n", .{parser.peek()});
+        if (options.verbose_error) std.debug.print("caught parser error, current token: {}\n", .{parser.peek()});
         return err;
     };
 
@@ -186,6 +190,7 @@ const Parser = struct {
         .{ .kind = .keyword_or, .rbp = .@"or", .parse_fn = parseLeftBinOp },
         .{ .kind = .pipe, .rbp = .filter, .parse_fn = parseLeftBinOp },
         .{ .kind = .dot, .rbp = .call, .parse_fn = parseLeftBinOp },
+        .{ .kind = .open_paren, .rbp = .call, .parse_fn = parseFuncCall },
     };
 
     fn parseLeafExpr(parser: *Parser, token: Token, bp: u8) Error!*Expression {
@@ -205,6 +210,19 @@ const Parser = struct {
     fn parseLeftBinOp(parser: *Parser, token: Token, lhs: *Expression, bp: u8) Error!*Expression {
         const rhs = try parser.parseExpression(bp);
         return Expression.binOp(parser.allocator, token.value, lhs, rhs);
+    }
+
+    fn parseFuncCall(parser: *Parser, token: Token, lhs: *Expression, bp: u8) Error!*Expression {
+        // parsing "foo(bar)"
+        if (lhs.* != .name) return error.ParseError;
+        // TODO handle commas separating arguments
+        var arg_list = std.ArrayList(*ast.Expression).init(parser.allocator);
+        while (parser.peek().kind != .close_paren) {
+            const arg = try parser.parseExpression(bp);
+            try arg_list.append(arg);
+        }
+        try parser.expect(.close_paren);
+        return Expression.funcCall(parser.allocator, lhs, arg_list.toOwnedSlice());
     }
 
     fn lookupNull(self: *Self) ?NullDenotationRule {
@@ -303,7 +321,7 @@ const Parser = struct {
 };
 
 fn testParseDumpTree(source: []const u8) !void {
-    var tree = try parse(std.testing.allocator, "", source);
+    var tree = try parse(std.testing.allocator, "", source, ParserOptions{});
     for (tree.stmts) |stmt| std.debug.print("{} ", .{stmt});
     std.debug.print("\n", .{});
     tree.destroy();
@@ -313,7 +331,7 @@ fn testParse(source: []const u8, want: []const u8) !void {
     var buf = std.ArrayList(u8).init(std.testing.allocator);
     defer buf.deinit();
     var writer = buf.writer();
-    var tree = parse(std.testing.allocator, "", source) catch @panic("couldn't parse");
+    var tree = parse(std.testing.allocator, "", source, ParserOptions{}) catch @panic("couldn't parse");
     defer tree.destroy();
     for (tree.stmts) |stmt, i| {
         std.fmt.format(writer, "{}", .{stmt.formatter()}) catch @panic("couldn't format");
@@ -362,10 +380,13 @@ test "simple parse" {
     try testParse("{{ foo.quux.fnord | bar | baz }}",
         \\(Expr (| (| (. (. foo quux) fnord) bar) baz))
     );
+    try testParse("{{ foo(bar) }}",
+        \\(Expr (funccall foo (bar)))
+    );
 }
 
 fn testParseError(source: []const u8) void {
-    var tree = parse(std.testing.allocator, "", source);
+    var tree = parse(std.testing.allocator, "", source, .{ .verbose_error = false });
     std.testing.expectError(error.ParseError, tree);
 }
 
