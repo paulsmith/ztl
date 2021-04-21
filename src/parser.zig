@@ -1,5 +1,6 @@
 // TODO:
 // - [ ] write a grammar for the template language
+// - [ ] use @"error" method
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const lex = @import("./lex.zig");
@@ -370,9 +371,11 @@ test "simple parse" {
         \\{% for name in name_list %}
         \\  <li>{{ name }}</li>
         \\{% endfor %}
+        \\</ul>
     ,
         \\(Output (text "<ul>\n"))
         \\(For (element name) (collection name_list) (body (Output (text "\n  <li>")) (Expr name) (Output (text "</li>\n"))))
+        \\(Output (text "\n</ul>"))
     );
     try testParse("{% if 2 + 5 < 8 and 6 * 7 > 41 %}ok{% endif %}",
         \\(If (predicate (and (> (* (< (+ 2 5) 8) 6 7) 41))) (consequent (Output (text "ok"))))
