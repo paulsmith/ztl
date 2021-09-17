@@ -205,12 +205,12 @@ const Parser = struct {
 
     fn parseNullPrefixOp(parser: *Parser, token: Token, bp: u8) Error!*Expression {
         const expr = try parser.parseExpression(bp);
-        return Expression.unaryOp(parser.allocator, token.value, expr); // FIXME copy token string value
+        return Expression.unaryOp(parser.allocator, token.kind, expr);
     }
 
     fn parseLeftBinOp(parser: *Parser, token: Token, lhs: *Expression, bp: u8) Error!*Expression {
         const rhs = try parser.parseExpression(bp);
-        return Expression.binOp(parser.allocator, token.value, lhs, rhs);
+        return Expression.binOp(parser.allocator, token.kind, lhs, rhs);
     }
 
     fn parseFuncCall(parser: *Parser, token: Token, lhs: *Expression, bp: u8) Error!*Expression {

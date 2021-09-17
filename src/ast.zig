@@ -1,16 +1,17 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Token = @import("./lex.zig").Token;
 
 pub const Expression = union(enum) {
     number: []const u8,
     name: []const u8,
     string: []const u8,
     unary_op: struct {
-        op: []const u8,
+        op: Token.Kind,
         expr: *Expression,
     },
     bin_op: struct {
-        op: []const u8,
+        op: Token.Kind,
         lhs: *Expression,
         rhs: *Expression,
     },
@@ -64,13 +65,13 @@ pub const Expression = union(enum) {
         return expr;
     }
 
-    pub fn unaryOp(allocator: *Allocator, op: []const u8, sub_expr: *Expression) !*Self {
+    pub fn unaryOp(allocator: *Allocator, op: Token.Kind, sub_expr: *Expression) !*Self {
         const expr = try allocator.create(Self);
         expr.* = .{ .unary_op = .{ .op = op, .expr = sub_expr } };
         return expr;
     }
 
-    pub fn binOp(allocator: *Allocator, op: []const u8, lhs: *Expression, rhs: *Expression) !*Self {
+    pub fn binOp(allocator: *Allocator, op: Token.Kind, lhs: *Expression, rhs: *Expression) !*Self {
         const expr = try allocator.create(Self);
         expr.* = .{ .bin_op = .{ .op = op, .lhs = lhs, .rhs = rhs } };
         return expr;
@@ -109,13 +110,13 @@ const ExpressionFormatter = struct {
             switch (item.expr.*) {
                 .unary_op => |unary_op| {
                     try writer.writeAll("(");
-                    try writer.writeAll(unary_op.op);
+                    try writer.writeAll(unary_op.op.operator());
                     try writer.writeAll(" ");
                     empty.append(.{ .expr = unary_op.expr, .append_sep = false }) catch @panic("couldn't append to the empty stack");
                 },
                 .bin_op => |bin_op| {
                     try writer.writeAll("(");
-                    try writer.writeAll(bin_op.op);
+                    try writer.writeAll(bin_op.op.operator());
                     try writer.writeAll(" ");
                     empty.append(.{ .expr = bin_op.lhs, .append_sep = true }) catch @panic("couldn't append to the empty stack");
                     empty.append(.{ .expr = bin_op.rhs, .append_sep = false }) catch @panic("couldn't append to the empty stack");

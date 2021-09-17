@@ -31,8 +31,8 @@ pub const Token = struct {
         comma, // ,
         tilde, // ~
         assign, // =
-        minus, // -
         plus, // +
+        minus, // -
         star, // *
         forward_slash, // /
         percent, // %
@@ -60,6 +60,28 @@ pub const Token = struct {
         keyword_raw,
         @"error",
         eof,
+
+        pub fn operator(self: Kind) []const u8 {
+            return switch (self) {
+                .plus => "+",
+                .minus => "-",
+                .star => "*",
+                .forward_slash => "/",
+                .percent => "%",
+                .less_than => "<",
+                .greater_than => ">",
+                .equal_to => "==",
+                .gt_or_equal_to => ">=",
+                .lt_or_equal_to => "<=",
+                .not => "!",
+                .not_equal => "!=",
+                .pipe => "|",
+                .dot => ".",
+                .keyword_and => "and",
+                .keyword_or => "or",
+                else => std.debug.panic("token kind '{s}' is not an operator", .{self}),
+            };
+        }
     };
 
     pub fn dump(token: Token) void {
@@ -282,7 +304,7 @@ pub const Lexer = struct {
                     var found = false;
                     for (close_delimiters) |d| {
                         if (mem.startsWith(u8, self.source[self.pos..], d.delimiter)) {
-                            if (delim != d.open_delim_kind) return self.@"error"("invalid closing delimiter: expected '{}', found '{}'", .{ d.open_delim_kind, @tagName(delim) });
+                            if (delim != d.open_delim_kind) return self.@"error"("invalid closing delimiter: expected '{s}', found '{s}'", .{ d.open_delim_kind, @tagName(delim) });
                             if (self.paren_depth != 0) return self.@"error"("unbalanced parens", .{});
                             self.delim_kind = d.close_delim_kind;
                             self.state = .tag_close;
