@@ -338,7 +338,7 @@ fn testParse(source: []const u8, want: []const u8) !void {
         std.fmt.format(writer, "{}", .{stmt.formatter()}) catch @panic("couldn't format");
         if (i < tree.stmts.len - 1) std.fmt.format(writer, "\n", .{}) catch @panic("couldn't format");
     }
-    std.testing.expectEqualStrings(want, buf.items);
+    try std.testing.expectEqualStrings(want, buf.items);
 }
 
 test "simple parse" {
@@ -388,13 +388,13 @@ test "simple parse" {
     );
 }
 
-fn testParseError(source: []const u8) void {
+fn testParseError(source: []const u8) !void {
     var tree = parse(std.testing.allocator, "", source, .{ .verbose_error = false });
-    std.testing.expectError(error.ParseError, tree);
+    try std.testing.expectError(error.ParseError, tree);
 }
 
 test "parse errors" {
-    testParseError(
+    try testParseError(
         \\extends must be very first thing if it is present
         \\{% extends "blah" %}
     );

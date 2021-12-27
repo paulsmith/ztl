@@ -478,59 +478,59 @@ pub const Lexer = struct {
     }
 };
 
-fn testLexer(source: []const u8, expected_tokens: []const Token.Kind) void {
+fn testLexer(source: []const u8, expected_tokens: []const Token.Kind) !void {
     var lexer = Lexer.init("", source);
     var it = lexer.iterator();
     for (expected_tokens) |expected, i| {
         if (it.next()) |token| {
             if (token.kind != expected) {
-                std.debug.panic("want {}, got {} - value: '{}'", .{ @tagName(expected), @tagName(token.kind), token.value });
+                std.debug.panic("want {s}, got {s} - value: '{s}'", .{ @tagName(expected), @tagName(token.kind), token.value });
             }
         } else {
-            std.debug.panic("expected a {} token at pos {d}", .{ @tagName(expected), i });
+            std.debug.panic("expected a {s} token at pos {d}", .{ @tagName(expected), i });
         }
     }
     const last = lexer.nextToken();
-    std.testing.expectEqual(last.kind, .eof);
+    try std.testing.expectEqual(last.kind, .eof);
 }
 
 test "lex simple template" {
-    testLexer("", &[_]Token.Kind{});
-    testLexer("<title>", &[_]Token.Kind{.text});
-    testLexer("{%", &[_]Token.Kind{.block_open});
-    testLexer("<title>\n{%", &[_]Token.Kind{ .text, .block_open });
-    testLexer("<title>\n{% block", &[_]Token.Kind{ .text, .block_open, .keyword_block });
-    testLexer("<title>\n{% block title", &[_]Token.Kind{ .text, .block_open, .keyword_block, .identifier });
-    testLexer("<title>\n{% block title %}", &[_]Token.Kind{ .text, .block_open, .keyword_block, .identifier, .block_close });
-    testLexer("<title>\n{% block title %}\n{% endblock %}</title>", &[_]Token.Kind{ .text, .block_open, .keyword_block, .identifier, .block_close, .text, .block_open, .keyword_endblock, .block_close, .text });
-    testLexer("comment test {# this is a comment #}\nrest of text", &[_]Token.Kind{ .text, .text });
-    testLexer("{{ variable_test }}", &[_]Token.Kind{ .variable_open, .identifier, .variable_close });
-    testLexer("{% ( ( ) ) %}", &[_]Token.Kind{ .block_open, .open_paren, .open_paren, .close_paren, .close_paren, .block_close });
-    testLexer("{% . | [ ] , ~ = - + * / % < > ! == <= >= != %}", &[_]Token.Kind{ .block_open, .dot, .pipe, .open_bracket, .close_bracket, .comma, .tilde, .assign, .minus, .plus, .star, .forward_slash, .percent, .less_than, .greater_than, .not, .equal_to, .lt_or_equal_to, .gt_or_equal_to, .not_equal, .block_close });
+    try testLexer("", &[_]Token.Kind{});
+    try testLexer("<title>", &[_]Token.Kind{.text});
+    try testLexer("{%", &[_]Token.Kind{.block_open});
+    try testLexer("<title>\n{%", &[_]Token.Kind{ .text, .block_open });
+    try testLexer("<title>\n{% block", &[_]Token.Kind{ .text, .block_open, .keyword_block });
+    try testLexer("<title>\n{% block title", &[_]Token.Kind{ .text, .block_open, .keyword_block, .identifier });
+    try testLexer("<title>\n{% block title %}", &[_]Token.Kind{ .text, .block_open, .keyword_block, .identifier, .block_close });
+    try testLexer("<title>\n{% block title %}\n{% endblock %}</title>", &[_]Token.Kind{ .text, .block_open, .keyword_block, .identifier, .block_close, .text, .block_open, .keyword_endblock, .block_close, .text });
+    try testLexer("comment test {# this is a comment #}\nrest of text", &[_]Token.Kind{ .text, .text });
+    try testLexer("{{ variable_test }}", &[_]Token.Kind{ .variable_open, .identifier, .variable_close });
+    try testLexer("{% ( ( ) ) %}", &[_]Token.Kind{ .block_open, .open_paren, .open_paren, .close_paren, .close_paren, .block_close });
+    try testLexer("{% . | [ ] , ~ = - + * / % < > ! == <= >= != %}", &[_]Token.Kind{ .block_open, .dot, .pipe, .open_bracket, .close_bracket, .comma, .tilde, .assign, .minus, .plus, .star, .forward_slash, .percent, .less_than, .greater_than, .not, .equal_to, .lt_or_equal_to, .gt_or_equal_to, .not_equal, .block_close });
 }
 
-fn testLexerLineNo(source: []const u8, line_numbers: []const usize, ending_line: usize) void {
+fn testLexerLineNo(source: []const u8, line_numbers: []const usize, ending_line: usize) !void {
     var lexer = Lexer.init("", source);
     var it = lexer.iterator();
     for (line_numbers) |line, i| {
         if (it.next()) |token| {
-            std.testing.expectEqual(line, token.line);
+            try std.testing.expectEqual(line, token.line);
         } else {
             std.debug.panic("expected a {}th token, but ran out", .{i});
         }
     }
     const last = lexer.nextToken();
-    std.testing.expectEqual(last.kind, .eof);
-    std.testing.expectEqual(last.line, ending_line);
+    try std.testing.expectEqual(last.kind, .eof);
+    try std.testing.expectEqual(last.line, ending_line);
 }
 
 test "tracking line numbers" {
-    testLexerLineNo("", &[_]usize{}, 1);
-    testLexerLineNo("<title>", &[_]usize{1}, 1);
-    testLexerLineNo("<title>\n", &[_]usize{1}, 2);
-    testLexerLineNo("<title>\n{%", &[_]usize{ 1, 2 }, 2);
-    testLexerLineNo("<title>\n{% block %}", &[_]usize{ 1, 2, 2, 2 }, 2);
-    testLexerLineNo("<title>\n{% block %}\n</title>", &[_]usize{ 1, 2, 2, 2, 2 }, 3);
+    try testLexerLineNo("", &[_]usize{}, 1);
+    try testLexerLineNo("<title>", &[_]usize{1}, 1);
+    try testLexerLineNo("<title>\n", &[_]usize{1}, 2);
+    try testLexerLineNo("<title>\n{%", &[_]usize{ 1, 2 }, 2);
+    try testLexerLineNo("<title>\n{% block %}", &[_]usize{ 1, 2, 2, 2 }, 2);
+    try testLexerLineNo("<title>\n{% block %}\n</title>", &[_]usize{ 1, 2, 2, 2, 2 }, 3);
 }
 
 test "error last token" {
@@ -540,7 +540,7 @@ test "error last token" {
         var it = lexer.iterator();
         var last: Token = undefined;
         while (it.next()) |token| last = token;
-        std.testing.expectEqual(Token.Kind.@"error", last.kind);
+        try std.testing.expectEqual(Token.Kind.@"error", last.kind);
     }
 }
 
@@ -550,8 +550,8 @@ test "string literals" {
     );
     _ = lexer.nextToken();
     const token = lexer.nextToken();
-    std.testing.expectEqual(Token.Kind.string, token.kind);
-    std.testing.expect(mem.eql(u8, "hello, world", token.value));
+    try std.testing.expectEqual(Token.Kind.string, token.kind);
+    try std.testing.expect(mem.eql(u8, "hello, world", token.value));
 }
 
 test "numbers" {
@@ -560,10 +560,10 @@ test "numbers" {
     );
     _ = lexer.nextToken();
     const token = lexer.nextToken();
-    std.testing.expectEqual(Token.Kind.number, token.kind);
-    std.testing.expect(mem.eql(u8, "42", token.value));
+    try std.testing.expectEqual(Token.Kind.number, token.kind);
+    try std.testing.expect(mem.eql(u8, "42", token.value));
 }
 
 test "lex next closest delimiter" {
-    testLexer("{{ foo }}{% bar %}", &[_]Token.Kind{ .variable_open, .identifier, .variable_close, .block_open, .identifier, .block_close });
+    try testLexer("{{ foo }}{% bar %}", &[_]Token.Kind{ .variable_open, .identifier, .variable_close, .block_open, .identifier, .block_close });
 }

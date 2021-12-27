@@ -210,7 +210,7 @@ const TemplateGroup = struct {
 
     pub fn deinit(self: *Self) void {
         var it = self.map.iterator();
-        while (it.next()) |entry| entry.value.tree.destroy();
+        while (it.next()) |entry| entry.value_ptr.tree.destroy();
         self.map.deinit();
         self.allocator.destroy(self);
     }
